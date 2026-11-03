@@ -137,7 +137,7 @@ end
     @test fin(bs) && nnz(bs) >= 1 && relerr(bs ./ s, b0) <= 1e-6
   end
   # nuclear_regression, slope and quantile_lasso are not checked at tiny scales:
-  # their stopping rules have absolute floors (see the report), so only large or
+  # their stopping rules have absolute floors (#214), so only large or
   # moderate scales are asserted
   λ = 0.3 * opnorm(Xc' * Yc / N)
   b0 = nuclear_regression(X, Y, λ).B
@@ -157,6 +157,34 @@ end
   end
 end
 
+@testset "small data scales report convergence at wrong answers (#214)" begin
+  # correct: the scaled fit equals the unscaled fit times s (rtol as at the passing
+  # scales), or the fit says converged == false, or an ArgumentError is thrown
+  function honest(fit, b0, s, rtol)
+    try
+      sol = fit()
+      b = sol isa NamedTuple ? sol.b : sol
+      !sol.converged || (fin(b) && relerr(b ./ s, b0) <= rtol)
+    catch e
+      e isa ArgumentError
+    end
+  end
+  slopeλ(λ) = fill(λ, P) .* (P:-1:1) ./ P
+  λn = 0.3 * opnorm(Xc' * Yc / N)
+  s = 1e-20
+  # #214: slope stops after one iteration at a wrong answer
+  b0 = Vector(slope(X, y; lambda = slopeλ(0.05), intercept = true).x)
+  @test_broken honest(() -> (r = slope(X, s .* y; lambda = slopeλ(s * 0.05), intercept = true); (b = Vector(r.x), converged = r.converged)), b0, s, 1e-6)
+  # #214: nuclear_regression's tolerance has an absolute floor of 1
+  b0 = nuclear_regression(X, Y, λn).B
+  @test_broken honest(() -> (r = nuclear_regression(X, s .* Y, s * λn); (b = r.B, converged = r.converged)), b0, s, 1e-6)
+  # #214: quantile_lasso returns converged with a zero fit
+  b0 = quantile_lasso(X, y, 0.05).β
+  @test_broken honest(() -> (r = quantile_lasso(X, s .* y, 0.05); (b = r.β, converged = r.converged)), b0, s, 1e-8)
+  # #214: at s = 1e150 quantile_lasso throws a raw ErrorException
+  @test_broken honest(() -> (r = quantile_lasso(X, 1e150 .* y, 0.05); (b = r.β, converged = r.converged)), b0, 1e150, 1e-8)
+end
+
 @testset "scale equivariance of the design: X -> s X" begin
   # lasso without standardization: β -> β/s needs λ -> s λ
   b0 = Vector(lasso(X, y, 0.05; intercept = true).x)
@@ -171,7 +199,7 @@ end
     @test fin(bs) && nnz(bs) >= 1 && relerr(bs .* s, b0) <= 1e-6
   end
 
-  # ISSUE_SCALE: lasso returns a converged all-zero fit when the design's squares overflow
+  # #200: lasso returns a converged all-zero fit when the design's squares overflow
   # correct: the fit of the unscaled problem / s, or a refusal (converged == false or ArgumentError)
   s = 1e200
   b0 = Vector(lasso(X, y, 0.05; intercept = true).x)
@@ -197,9 +225,9 @@ end
   catch e
     e isa ArgumentError
   end
-  # ISSUE_SPARSE: group_lasso (default standardize = :orthonormal) throws "Pivoting Strategies are not supported by SparseMatrixCSC"
+  # #201: group_lasso (default standardize = :orthonormal) throws "Pivoting Strategies are not supported by SparseMatrixCSC"
   @test_broken agree(X -> group_lasso(X, ys, 0.02, gs).x)
-  # ISSUE_SPARSE: rlasso throws the same ErrorException from the pivoted QR
+  # #201: rlasso throws the same ErrorException from the pivoted QR
   @test_broken agree(X -> rlasso(X, ys).x)
 end
 
