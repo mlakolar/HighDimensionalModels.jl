@@ -406,3 +406,4 @@ function StatsAPI.predict(cv::CVGLMLassoPath, X::AbstractMatrix{<:Real}; λ::Uni
   η = cv.path.intercept ? Vector(X * b[2:end]) .+ b[1] : Vector(X * b)
   _glmscale(cv.path.loss, _addoffset!(η, offset), type)
 end
+# CI scenario: a comment-only change to shared cross-validation code.
