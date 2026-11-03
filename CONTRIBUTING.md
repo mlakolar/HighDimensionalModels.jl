@@ -66,12 +66,13 @@ so does a path no rule matches, and a deleted or renamed source or test file.
 A changed test file selects itself; adding a parallel test file to
 `test/testsuite.toml` selects it.
 
-When you add a source file, add a rule for it to `test/impact.toml` (the
-planner's tests fail otherwise), naming the families whose tests call into it,
-directly or through other source files. When you add a test file, put it in a
-family. Selection is a convenience, not proof: the nightly full run is the
-check, and a failure it finds that a selective run missed is a bug in the map,
-recorded under `[[miss]]` in `test/impact.toml`.
+When you add a source file, add a rule for it to `test/impact.toml`, naming the
+families or tests that call into it, directly or through other source files; the
+planner stops on a source file without such a rule, and on one whose rules only
+add CI jobs. When you add a test file, put it in a family. Selection is a
+convenience, not proof: full runs are the check (today CI runs every file), and
+a failure one finds that a selective run missed is a bug in the map, recorded
+under `[[miss]]` in `test/impact.toml`.
 
 For examples or documentation, run `julia scripts/instantiate_release.jl examples`
 or `julia scripts/instantiate_release.jl docs`, respectively. These environments

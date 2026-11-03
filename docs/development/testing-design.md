@@ -4,10 +4,10 @@ This note records how the tests run, how a change selects its tests, and how CI 
 required. CONTRIBUTING.md has the commands; this file has the reasons. It is not part of the
 documentation site.
 
-Status: sections 1-3 are implemented by PR #203 (#196, the parallel runner). Sections 4-11 are
-design proposals for the follow-up issues #197 (impact map and planner, sections 4-6) and #198
-(selective CI, sections 7-11); none of it exists yet. Until then every pull request and push runs
-the whole suite on the existing CI matrix. #195 tracks the whole.
+Status: sections 1-3 are implemented by PR #203 (#196, the parallel runner) and sections 4-6 by
+PR #204 (#197, the impact map and planner, used locally by `scripts/test_affected.jl`). Sections
+7-11 are design proposals for #198 (selective CI); none of it exists yet, so every pull request and
+push still runs the whole suite on the existing CI matrix. #195 tracks the whole.
 
 ## 1. Execution model
 
@@ -66,9 +66,7 @@ unclassified, listed twice, listed as both a test and a non-test, or listed but 
 `test/testsuite_validation.jl` tests each of these checks, `--only` and prefix selection, and that
 a failing child-process test fails the run.
 
-## 4. Source-to-test mapping (proposed)
-
-*Sections 4-11 are proposals for #197 and #198, not current behaviour.*
+## 4. Source-to-test mapping
 
 `test/impact.toml` is the single dependency map. It names *families* (sets of test files) and
 *rules*: a rule matches path globs and selects families, test files, extra CI jobs, or the whole
@@ -92,7 +90,7 @@ selective; that is a production refactor and is left for later.
 Every selection adds the smoke file (`test/smoke.jl`: one cheap call per estimator family), Aqua
 and the deprecation child for source changes.
 
-## 5. Change detection (proposed)
+## 5. Change detection
 
 - Pull request: the files changed between the merge commit's parents (`HEAD^1..HEAD` of the
   checked-out merge commit), so the whole PR is compared with the base it merges into, however many
@@ -101,20 +99,29 @@ and the deprecation child for source changes.
   full.
 - Tags, the schedules, and manual runs with `full`: full, without a diff.
 - A failed `git` command, an empty diff on a code event, or an unparsable map: full. The planner
-  never answers "no tests" because something failed.
+  never answers "no tests" because something failed. If `git ls-files` fails, the source files
+  cannot be checked against the map (section 6), so the plan is full and says why.
 
-## 6. Risk policy for test changes (proposed)
+## 6. Risk policy for test changes
 
-- A changed test file selects itself (plus smoke).
+- A changed test file selects itself (plus smoke), and whatever a rule for its directory adds.
 - A helper or fixture selects the files that use it (rules in the map).
 - The runner, the inventory, the map, the planner, `Project.toml` and workflows: full.
 - A deleted test file: full; deletion is rare and a deleted file cannot say what it covered.
-- A changed source file with no rule (a new file): full, and the planner says so. The planner's own
-  tests fail when a file under `src/` or `ext/` has no rule, so the map cannot drift.
+- A changed source file with no rule (a new file): full, and the planner says so.
+- Every file under `src/` and `ext/` must be matched by a full rule, or by focused and broad rules
+  that name at least one family or test between them; a rule that only adds CI jobs may accompany
+  them, and a none rule never counts. Otherwise the planner stops with an error (and its tests
+  fail), because changing the file would run only the smoke and package-wide checks. Paths outside
+  `src/` and `ext/` may have job-only or test-less rules.
+- An unclassified Julia file anywhere under `test/` stops the planner as it stops the runner
+  (section 3).
 - Source changed without a test change: reported in the plan summary.
 - Documentation only (`docs/**`, Markdown, `LICENSE`): no package tests; the gate still reports.
 
 ## 7. GitHub Actions (proposed)
+
+*Sections 7-11 are proposals for #198, not current behaviour.*
 
 One workflow, `CI.yml`:
 
