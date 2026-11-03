@@ -144,7 +144,7 @@ collected on PRs.
 ## 8. Scheduled and release validation
 
 - Nightly (Monday to Saturday): the full registered suite on Linux, Julia lts and 1, with
-  coverage on Julia 1; the Knockoffs job; master-dependency integration (full suite), which
+  coverage; the Knockoffs job; master-dependency integration (full suite), which
   records the ProximalBase and ProximalSolvers commits it tested.
 - Weekly (Sunday): the nightly jobs plus macOS and Windows and the examples.
 - Release: a tag push runs the weekly set; before tagging, run it by hand
@@ -160,8 +160,11 @@ belong to #138.
 
 ## 9. Coverage
 
-Collected only in full runs (nightly and weekly Julia 1 Linux job, and the Knockoffs job for the
-extension), so every upload comes from the same, complete suite. Selective PR runs collect none.
+Collected only in full runs (the nightly and weekly Linux jobs on Julia lts and 1, and the Knockoffs
+job for the extension), so every upload comes from the same, complete suite. Both Julia versions
+upload, as before: lts counts some method-definition lines that Julia 1 does not, and without the
+lts upload about 50 such lines would show as missed although their bodies are covered. Selective
+PR runs collect none; a PR whose head commit says `CI: full` collects it.
 
 ## 10. Performance measurement
 

@@ -99,8 +99,10 @@ jobs:
         env:
           TESTS: ${{ needs.plan.outputs.tests }}
           JULIA_TEST_DEPWARN: error
-          # Coverage only from complete suites, on one job, so every upload measures the same thing.
-          JULIA_TEST_COVERAGE: ${{ needs.plan.outputs.coverage == 'true' && matrix.version == '1' }}
+          # Coverage only from complete suites, so every upload measures the same thing. Both Julia
+          # versions upload: lts attributes method-definition lines that Julia 1 does not, and
+          # Codecov merges the uploads of a commit.
+          JULIA_TEST_COVERAGE: ${{ needs.plan.outputs.coverage == 'true' }}
           PTR_NUM_JOBS: '2'
         # shell: bash runs with -eo pipefail, so a failing test run fails the step through tee.
         run: |
@@ -114,9 +116,9 @@ jobs:
         run: |
           { echo '```'; sed -n '/^Test Summary:/,$p' "$RUNNER_TEMP/tests.log" | head -80; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: julia-actions/julia-processcoverage@v1
-        if: needs.plan.outputs.coverage == 'true' && matrix.version == '1'
+        if: needs.plan.outputs.coverage == 'true'
       - uses: codecov/codecov-action@v7
-        if: needs.plan.outputs.coverage == 'true' && matrix.version == '1'
+        if: needs.plan.outputs.coverage == 'true'
         with:
           # Codecov repository lookup requires its canonical lowercase slug.
           slug: mlakolar/highdimensionalmodels.jl
