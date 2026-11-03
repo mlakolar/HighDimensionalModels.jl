@@ -134,7 +134,7 @@ end
   @test !haskey(suite, "helper")
   cmd = string(suite["x"])
   @test occursin("\"--startup-file=no\", \"--depwarn=yes\", \"--project=\"", cmd)
-  @test occursin(joinpath(dir, "x.jl"), cmd)
+  @test occursin(repr(joinpath(dir, "x.jl")), cmd)   # as a string literal: Windows paths print escaped
 end
 
 @testset "--only" begin
