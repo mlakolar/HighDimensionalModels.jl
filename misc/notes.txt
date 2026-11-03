@@ -1,0 +1,1 @@
+CI scenario: a path no rule matches
