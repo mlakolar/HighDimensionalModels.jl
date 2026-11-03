@@ -1,7 +1,8 @@
 # The test inventory (test/testsuite.toml): which Julia files under test/ are test files and
 # how each one runs. It depends only on TOML, so CI scripts can load it without installing the
 # package. test/runtests.jl refuses to run when a file is unclassified or a listed file is
-# missing, so a new test file cannot be silently skipped.
+# missing, so a new test file cannot be silently skipped. The selection and worker-count helpers
+# at the end are used by test/runtests.jl; test/testsuite_validation.jl tests all of it.
 module TestSuite
 
 using TOML
@@ -15,7 +16,7 @@ struct Inventory
   serial::Vector{String}
   "Test files run in a fresh child process with these extra Julia flags."
   subprocess::Dict{String,Vector{String}}
-  "Julia files that are not test files (glob => reason)."
+  "Julia files that are not test files (name => reason), each named exactly; there are no patterns."
   not_tests::Dict{String,String}
 end
 
@@ -36,9 +37,11 @@ function load(path::AbstractString)
     subprocess[name] = String.(flags)
   end
   not_tests = Dict{String,String}()
-  for (glob, reason) in get(data, "not_tests", Dict{String,Any}())
-    reason isa String && !isempty(reason) || error("$path: not_tests.\"$glob\" needs a reason")
-    not_tests[glob] = reason
+  for (name, reason) in get(data, "not_tests", Dict{String,Any}())
+    # Exact names only: a pattern would also exempt files added later, without a decision.
+    occursin('*', name) && error("$path: not_tests.\"$name\": name each file; patterns are not accepted")
+    reason isa String && !isempty(reason) || error("$path: not_tests.\"$name\" needs a reason")
+    not_tests[name] = reason
   end
   inv = Inventory(names("parallel"), names("serial"), subprocess, not_tests)
   seen = Dict{String,Int}()
@@ -68,15 +71,6 @@ function discover(dir::AbstractString)
   return sort!(found)
 end
 
-# `*` matches within a path segment, `**` across segments.
-function glob_regex(glob::AbstractString)
-  parts = split(glob, "**")
-  inner = map(p -> join(map(s -> replace(s, r"[\\^$.|?+()\[\]{}]" => x -> "\\" * x), split(p, '*')), "[^/]*"), parts)
-  return Regex("^" * join(inner, ".*") * "\$")
-end
-
-matches(glob, name) = occursin(glob_regex(glob), name)
-
 """
     check(inv, discovered)
 
@@ -86,20 +80,18 @@ non-test (or is both), a listed test without a file, and a non-test entry matchi
 function check(inv::Inventory, discovered)
   problems = String[]
   tests = Set(alltests(inv))
+  for name in sort!(collect(intersect(tests, keys(inv.not_tests))))
+    push!(problems, "`$name` is listed both as a test and in not_tests")
+  end
   for name in discovered
-    globs = [g for g in keys(inv.not_tests) if matches(g, name)]
-    if name in tests
-      isempty(globs) || push!(problems, "test/$name.jl is a test and matches not_tests $(join(globs, ", "))")
-    elseif isempty(globs)
+    name in tests || haskey(inv.not_tests, name) ||
       push!(problems, "test/$name.jl is not classified: add it to a list in test/testsuite.toml")
-    end
   end
   for name in sort!(collect(setdiff(tests, discovered)))
     push!(problems, "test/testsuite.toml lists `$name`, but test/$name.jl does not exist")
   end
-  for glob in sort!(collect(keys(inv.not_tests)))
-    any(name -> matches(glob, name), discovered) ||
-      push!(problems, "test/testsuite.toml: not_tests entry \"$glob\" matches no file")
+  for name in sort!(collect(setdiff(keys(inv.not_tests), discovered)))
+    push!(problems, "test/testsuite.toml: not_tests entry \"$name\", but test/$name.jl does not exist")
   end
   isempty(problems) || error("The test inventory is inconsistent:\n  " * join(problems, "\n  "))
   return nothing
@@ -119,5 +111,40 @@ function testsuite(inv::Inventory, dir::AbstractString)
   end
   return suite
 end
+
+"""
+    select_only!(suite, value)
+
+Keep exactly the tests named in `value` (`--only=a,b`), a comma-separated list. An empty list
+or a name that is not a test is an error, so a typo cannot select nothing and pass.
+"""
+function select_only!(suite::AbstractDict, value::Union{Nothing,AbstractString})
+  names = value === nothing ? String[] : filter!(!isempty, strip.(split(value, ',')))
+  isempty(names) && error("--only needs test names, for example --only=lasso,cv")
+  unknown = filter(name -> !haskey(suite, name), names)
+  isempty(unknown) || error("--only: no test file $(join(unknown, ", ")); `--list` shows the names")
+  filter!(((name, _),) -> name in names, suite)
+  return suite
+end
+
+"The Julia threads of each worker: `HDM_TEST_THREADS`, default 2."
+function worker_threads(value::AbstractString = get(ENV, "HDM_TEST_THREADS", "2"))
+  threads = tryparse(Int, value)
+  threads !== nothing && threads >= 1 || error("HDM_TEST_THREADS must be a positive integer, got \"$value\"")
+  return threads
+end
+
+"The CPU threads this process may use: `Sys.EFFECTIVE_CPU_THREADS` (cgroup and affinity limits)
+where Julia has it, else `Sys.CPU_THREADS` (Julia 1.10)."
+cpu_threads() = @static isdefined(Sys, :EFFECTIVE_CPU_THREADS) ? Sys.EFFECTIVE_CPU_THREADS : Sys.CPU_THREADS
+
+"""
+    max_workers(threads, cpus = cpu_threads())
+
+The default worker count's upper bound: the CPU budget divided among workers of `threads`
+Julia threads each, at least one. ParallelTestRunner applies its memory bound on top, and
+`--jobs`/`PTR_NUM_JOBS` override both.
+"""
+max_workers(threads::Integer, cpus::Integer = cpu_threads()) = max(1, cpus ÷ threads)
 
 end

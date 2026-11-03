@@ -31,11 +31,13 @@ julia scripts/test_registered.jl --jobs=4 --verbose
 
 Within Julia, `Pkg.test(test_args=["--only=glm"])` does the same. Each worker
 uses `HDM_TEST_THREADS` Julia threads (default 2) and one BLAS thread; the
-default worker count keeps workers × threads within the CPU threads, and
-`--jobs=N` or `PTR_NUM_JOBS` overrides it.
+default worker count keeps workers × threads within the CPU threads available
+to the process (a container's quota counts on Julia versions that expose it),
+and `--jobs=N` or `PTR_NUM_JOBS` overrides it.
 
-Every Julia file under `test/` is listed in `test/testsuite.toml`, and the
-runner stops if one is not. A test file must run on its own: it declares every
+Every Julia file under `test/` is listed in `test/testsuite.toml` by its exact
+path, fixture scripts in subdirectories included, and the runner stops if one
+is not. A test file must run on its own: it declares every
 `using` it needs, loads the optional backend it tests (HiGHS, ProximalAlgorithms,
 StatsModels), uses explicit RNGs or seeds its own, and does not rely on another
 file. Workers are reused, so an extension another file loaded may already be
@@ -64,12 +66,13 @@ so does a path no rule matches, and a deleted or renamed source or test file.
 A changed test file selects itself; adding a parallel test file to
 `test/testsuite.toml` selects it.
 
-When you add a source file, add a rule for it to `test/impact.toml` (the
-planner's tests fail otherwise), naming the families whose tests call into it,
-directly or through other source files. When you add a test file, put it in a
-family. Selection is a convenience, not proof: the nightly full run is the
-check, and a failure it finds that a selective run missed is a bug in the map,
-recorded under `[[miss]]` in `test/impact.toml`.
+When you add a source file, add a rule for it to `test/impact.toml`, naming the
+families or tests that call into it, directly or through other source files; the
+planner stops on a source file without such a rule, and on one whose rules only
+add CI jobs. When you add a test file, put it in a family. Selection is a
+convenience, not proof: the nightly full run is the check, and a failure it
+finds that a selective run missed is a bug in the map, recorded under `[[miss]]`
+in `test/impact.toml`.
 
 ## Continuous integration
 
