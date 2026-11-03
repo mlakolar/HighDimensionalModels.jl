@@ -1444,3 +1444,4 @@ StatsAPI.coef(cv::CVGeneralizedLassoPath; λ = :λ1se) = coef(cv.path, _cvlevel(
 StatsAPI.predict(cv::CVGeneralizedLassoPath, X::AbstractMatrix; λ = :λ1se) =
   predict(cv.path, X, _cvlevel(cv, λ))
 StatsAPI.fit(::Type{CVGeneralizedLassoPath}, args...; kwargs...) = CVGeneralizedLassoPath(args...; kwargs...)
+# CI scenario: a comment-only change to a focused source file.
