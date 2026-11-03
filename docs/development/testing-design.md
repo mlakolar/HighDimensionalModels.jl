@@ -111,10 +111,11 @@ One workflow, `CI.yml`:
 |---|---|
 | `plan` | always; computes the plan, writes the summary, exports outputs |
 | `test` (Linux, Julia lts and 1) | the plan selects any test file |
-| `test-cross` (macOS, Windows) | weekly, tags, manual full |
+| `test-cross` (macOS, Windows) | weekly, tags, manual runs, `Project.toml` and `CI.yml` changes, `CI: full` |
 | `master-integration` | the change touches the ProximalBase/ProximalSolvers interface; nightly |
 | `knockoff-extension` (lts, 1) | knockoff sources, the Knockoffs extension, full changes |
-| `examples` | the public APIs the examples use, `examples/**`; weekly |
+| `examples` | the public APIs the examples use, `examples/**`; full plans; weekly |
+| `report` | a failing non-PR run: opens or comments on "CI failing on master" |
 | `gate` | always (`if: always()`), named `gate` on pull requests |
 
 The test jobs run the selected files with two workers in one job per Julia version, which shares
@@ -143,14 +144,19 @@ collected on PRs.
 ## 8. Scheduled and release validation
 
 - Nightly (Monday to Saturday): the full registered suite on Linux, Julia lts and 1, with
-  coverage on Julia 1; the Knockoffs job; master-dependency integration (full suite), which prints
-  the ProximalBase and ProximalSolvers commits it tested.
+  coverage on Julia 1; the Knockoffs job; master-dependency integration (full suite), which
+  records the ProximalBase and ProximalSolvers commits it tested.
 - Weekly (Sunday): the nightly jobs plus macOS and Windows and the examples.
 - Release: a tag push runs the weekly set; before tagging, run it by hand
-  (`gh workflow run CI.yml -f full=true`).
+  (`gh workflow run CI.yml --ref <branch>`).
 
 Schedules do not skip a commit that already passed: registered dependencies and dependency masters
 change between nights, so the commit alone does not identify what was tested.
+
+Benchmark correctness checks stay with #138. The planner's families map onto the harness groups
+(lasso, glm, group, multitask, lowrank, quantile, structured, selection, inference), so a
+`benchmark` job could take the families of a plan as `HDM_GROUPS`; that job and its acceptance
+belong to #138.
 
 ## 9. Coverage
 

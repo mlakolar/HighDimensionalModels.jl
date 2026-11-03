@@ -357,7 +357,7 @@ function compute(args; dir = ROOT)
     return full_plan("The $schedule run tests every file."; cross = schedule == "weekly")
   elseif event == "tag"
     return full_plan("A tag is a release: every file on every platform."; cross = true)
-  elseif "--full" in args
+  elseif "--full" in args || event == "workflow_dispatch"
     return full_plan("Full validation was requested."; cross = true)
   end
   base = option(args, "base", event == "local" ? something(git(["merge-base", "origin/master", "HEAD"]; dir), "origin/master") : nothing)
@@ -372,7 +372,64 @@ function compute(args; dir = ROOT)
   return plan(changes, impact, inventory; base_inventory = inventory_at(strip(base); dir), explicit_full = explicit)
 end
 
+# ---- gate ----------------------------------------------------------------------------------
+
+"""
+    verdict(plan_result, plan_ok, plan_jobs, results) -> (passed, lines)
+
+The required check of a CI run. It passes only if the plan job succeeded and wrote its outputs,
+every job the plan required succeeded, and every other job was skipped (or succeeded).
+`results` maps each CI job to its `needs.<job>.result`; a job missing from it fails the check.
+"""
+function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_jobs::AbstractString,
+                 results::AbstractDict)
+  lines = String[]
+  fail(msg) = push!(lines, "FAIL: " * msg)
+  plan_result == "success" || fail("the plan job ended with `$(isempty(plan_result) ? "no result" : plan_result)`.")
+  plan_ok == "true" || fail("the plan did not write a complete plan.")
+  required = split(plan_jobs)
+  for j in required
+    j in JOBS || fail("the plan names an unknown job `$j`.")
+  end
+  for j in JOBS
+    r = get(results, j, "")
+    if j in required
+      r == "success" ? push!(lines, "ok: $j (required) succeeded.") : fail("$j is required, but its result is `$(isempty(r) ? "missing" : r)`.")
+    elseif r in ("skipped", "success")
+      push!(lines, "ok: $j (not required) $r.")
+    else
+      fail("$j was not required, but its result is `$(isempty(r) ? "missing" : r)`.")
+    end
+  end
+  for j in sort!(collect(keys(results)))
+    j in JOBS || fail("unexpected job `$j` in the results: update CIPlan.JOBS.")
+  end
+  return !any(l -> startswith(l, "FAIL"), lines), lines
+end
+
+"The gate job: reads PLAN_RESULT, PLAN_OK, PLAN_JOBS and RESULTS (`job=result` words) from ENV."
+function gate()
+  results = Dict{String,String}()
+  for word in split(get(ENV, "RESULTS", ""))
+    k, v = occursin('=', word) ? split(word, '='; limit = 2) : (word, "")
+    results[k] = v
+  end
+  passed, lines = verdict(get(ENV, "PLAN_RESULT", ""), get(ENV, "PLAN_OK", ""), get(ENV, "PLAN_JOBS", ""), results)
+  foreach(println, lines)
+  println(passed ? "Every job the plan required passed." : "The required jobs did not all pass.")
+  summary = get(ENV, "GITHUB_STEP_SUMMARY", "")
+  isempty(summary) || open(summary, "a") do io
+    println(io, "### Gate: ", passed ? "passed" : "failed", "\n")
+    foreach(l -> println(io, "- ", l), lines)
+  end
+  return passed
+end
+
 function main(args)
+  if "--gate" in args
+    gate() || exit(1)
+    return nothing
+  end
   p = compute(args)
   describe(stdout, p)
   out = option(args, "github-output")

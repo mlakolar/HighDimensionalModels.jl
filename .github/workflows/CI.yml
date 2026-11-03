@@ -1,80 +1,178 @@
 name: CI
+# The plan job decides what runs (scripts/ci_plan.jl, test/impact.toml; CONTRIBUTING.md):
+# - pull requests and pushes to master: the test files the changed paths can affect, plus a smoke
+#   test, on Linux with Julia lts and 1, and the integration, Knockoffs and examples jobs their
+#   rules name; shared code, dependencies, the runner and CI select every file. Documentation
+#   alone runs no package test. A PR head commit with a line `CI: full` runs everything.
+# - nightly (Monday to Saturday): every file on Linux, the Knockoffs and master-dependency jobs,
+#   and coverage; weekly (Sunday): the same plus macOS, Windows and the examples.
+# - tags and manual runs (`gh workflow run CI.yml --ref <branch>`): the weekly set.
+# The `gate` job is the required check. It passes only if the plan succeeded and every job the
+# plan required succeeded (an unrequired job must be skipped). It is named `gate` only in
+# pull_request runs, so a manual run on a PR branch cannot stand in for the PR's check.
 on:
+  pull_request:
   push:
     branches:
       - master
     tags: ['*']
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
+  schedule:
+    # Keep these strings in sync with the plan step below.
+    - cron: '17 4 * * 1-6' # nightly
+    - cron: '17 4 * * 0'   # weekly
   workflow_dispatch:
 concurrency:
-  # Skip intermediate builds: always.
-  # Cancel intermediate builds: only if it is a pull request build.
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+  # A new commit cancels a PR's older run. Every other run has its own group: a push to master is
+  # never cancelled or replaced by a later one.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
 jobs:
+  plan:
+    name: Test plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      level: ${{ steps.plan.outputs.level }}
+      tests: ${{ steps.plan.outputs.tests }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+      coverage: ${{ steps.plan.outputs.coverage }}
+      ok: ${{ steps.plan.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A PR checks out its merge commit: HEAD^1 is the base it merges into, HEAD^2 the PR head.
+          fetch-depth: 2
+      - name: Fetch the commit before the push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: git fetch --no-tags --depth=1 origin "$BEFORE" || echo "::warning::$BEFORE not found; the push runs every test file."
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - name: Check naming conventions
+        run: python3 scripts/check_naming.py
+      - name: Plan the tests
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          case "$EVENT" in
+            pull_request) args=(--base=HEAD^1 --head=HEAD --request-sha=HEAD^2) ;;
+            push)
+              if [[ "$REF" == refs/tags/* ]]; then EVENT=tag; args=()
+              else args=("--base=$BEFORE" --head=HEAD); fi ;;
+            schedule)
+              if [ "$SCHEDULE" = '17 4 * * 0' ]; then args=(--schedule=weekly); else args=(--schedule=nightly); fi ;;
+            workflow_dispatch) args=() ;;
+            *) echo "::error::Unexpected event $EVENT."; exit 1 ;;
+          esac
+          julia --startup-file=no scripts/ci_plan.jl "--event=$EVENT" "${args[@]}" \
+            "--github-output=$GITHUB_OUTPUT" "--summary=$GITHUB_STEP_SUMMARY"
+
   test:
-    name: Registered - Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
+    name: Julia ${{ matrix.version }} - ubuntu-latest - registered
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' test ')
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
-      actions: write
+    permissions:
+      actions: write # julia-actions/cache deletes its old caches
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - 'lts'
-          - '1'
-        os:
-          - ubuntu-latest
-        arch:
-          - x64
-        include:
-          - version: '1'
-            os: macos-latest
-            arch: aarch64
-          - version: '1'
-            os: windows-latest
-            arch: x64
+        version: ['lts', '1']
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-          arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v3
-      - name: Check naming conventions
-        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check_naming.py
-      - name: Test the canonical API with deprecations as errors
-        run: julia --color=yes scripts/test_registered.jl
+      - name: Run the planned test files
+        shell: bash
         env:
-          JULIA_NUM_THREADS: "2"
-          JULIA_TEST_DEPWARN: "error"
-          JULIA_TEST_COVERAGE: "true"
-          # Two test workers, each with two Julia threads and one BLAS thread.
-          PTR_NUM_JOBS: "2"
+          TESTS: ${{ needs.plan.outputs.tests }}
+          JULIA_TEST_DEPWARN: error
+          # Coverage only from complete suites, on one job, so every upload measures the same thing.
+          JULIA_TEST_COVERAGE: ${{ needs.plan.outputs.coverage == 'true' && matrix.version == '1' }}
+          PTR_NUM_JOBS: '2'
+        # shell: bash runs with -eo pipefail, so a failing test run fails the step through tee.
+        run: |
+          [[ "$TESTS" =~ ^[a-z0-9_,/]+$ ]] || { echo "::error::Invalid test selection '$TESTS'."; exit 1; }
+          if [ "$TESTS" = all ]; then selection=(); else selection=("--only=$TESTS"); fi
+          julia --color=yes scripts/test_registered.jl --verbose "${selection[@]}" 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          { echo '```'; sed -n '/^Test Summary:/,$p' "$RUNNER_TEMP/tests.log" | head -80; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: julia-actions/julia-processcoverage@v1
+        if: needs.plan.outputs.coverage == 'true' && matrix.version == '1'
       - uses: codecov/codecov-action@v7
+        if: needs.plan.outputs.coverage == 'true' && matrix.version == '1'
         with:
           # Codecov repository lookup requires its canonical lowercase slug.
           slug: mlakolar/highdimensionalmodels.jl
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  test-cross:
+    name: Julia 1 - ${{ matrix.os }} - registered
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' test-cross ')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      actions: write # julia-actions/cache deletes its old caches
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: aarch64
+          - os: windows-latest
+            arch: x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+          arch: ${{ matrix.arch }}
+      - uses: julia-actions/cache@v3
+      - name: Run the planned test files
+        shell: bash
+        env:
+          TESTS: ${{ needs.plan.outputs.tests }}
+          JULIA_TEST_DEPWARN: error
+          PTR_NUM_JOBS: '2'
+        run: |
+          [[ "$TESTS" =~ ^[a-z0-9_,/]+$ ]] || { echo "::error::Invalid test selection '$TESTS'."; exit 1; }
+          if [ "$TESTS" = all ]; then selection=(); else selection=("--only=$TESTS"); fi
+          julia --color=yes scripts/test_registered.jl --verbose "${selection[@]}" 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          { echo '```'; sed -n '/^Test Summary:/,$p' "$RUNNER_TEMP/tests.log" | head -80; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   master-integration:
     name: Master dependency integration
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' master-integration ')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      actions: write
+      actions: write # julia-actions/cache deletes its old caches
       contents: read
     steps:
       - uses: actions/checkout@v7
@@ -83,30 +181,33 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       - run: julia scripts/instantiate.jl
-      - run: julia scripts/test_master.jl
+      - name: Record the dependency commits
+        shell: bash
+        run: |
+          for pkg in ProximalBase ProximalSolvers; do
+            line="$pkg.jl master at $(git -C "../$pkg.jl" rev-parse HEAD)"
+            echo "$line"; echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Run the planned test files against the master checkouts
+        shell: bash
         env:
-          JULIA_NUM_THREADS: "2"
-          JULIA_TEST_DEPWARN: "error"
-          PTR_NUM_JOBS: "2"
-  examples:
-    name: Examples
+          TESTS: ${{ needs.plan.outputs.tests }}
+          JULIA_TEST_DEPWARN: error
+          PTR_NUM_JOBS: '2'
+        run: |
+          [[ "$TESTS" =~ ^[a-z0-9_,/]+$ ]] || { echo "::error::Invalid test selection '$TESTS'."; exit 1; }
+          if [ "$TESTS" = all ]; then selection=(); else selection=("--only=$TESTS"); fi
+          julia --color=yes scripts/test_master.jl --verbose "${selection[@]}"
+
+  knockoff-extension:
+    name: Registered Knockoffs extension - Julia ${{ matrix.version }}
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' knockoff-extension ')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      actions: write
+      actions: write # julia-actions/cache deletes its old caches
       contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: '1'
-      - uses: julia-actions/cache@v3
-      - run: julia scripts/instantiate_release.jl examples
-      - run: julia --project=examples examples/run_all.jl
-  knockoff-extension:
-    name: Registered Knockoffs extension - Julia ${{ matrix.version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -126,14 +227,86 @@ jobs:
         env:
           JULIA_NUM_THREADS: '1'
           OPENBLAS_NUM_THREADS: '1'
-          JULIA_TEST_COVERAGE: 'true'
+          JULIA_TEST_COVERAGE: ${{ needs.plan.outputs.coverage }}
       - uses: julia-actions/julia-processcoverage@v1
+        if: needs.plan.outputs.coverage == 'true'
         with:
           directories: src,ext
       - uses: codecov/codecov-action@v7
+        if: needs.plan.outputs.coverage == 'true'
         with:
           # Codecov repository lookup requires its canonical lowercase slug.
           slug: mlakolar/highdimensionalmodels.jl
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  examples:
+    name: Examples
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' examples ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write # julia-actions/cache deletes its old caches
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - run: julia scripts/instantiate_release.jl examples
+      - run: julia --project=examples examples/run_all.jl
+
+  gate:
+    # Runs after every job, even when one failed or the run was cancelled (a skipped required check
+    # would count as passing). It reads this run's job results, not the REST API.
+    name: ${{ github.event_name == 'pull_request' && 'gate' || format('gate ({0})', github.event_name) }}
+    needs: [plan, test, test-cross, master-integration, knockoff-extension, examples]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - name: Check that every required job passed
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_OK: ${{ needs.plan.outputs.ok }}
+          PLAN_JOBS: ${{ needs.plan.outputs.jobs }}
+          RESULTS: >-
+            test=${{ needs.test.result }}
+            test-cross=${{ needs.test-cross.result }}
+            master-integration=${{ needs.master-integration.result }}
+            knockoff-extension=${{ needs.knockoff-extension.result }}
+            examples=${{ needs.examples.result }}
+        run: julia --startup-file=no scripts/ci_plan.jl --gate
+
+  report:
+    # A failing push to master, tag, nightly, weekly or manual run opens (or comments on) an issue.
+    # No pull request code runs with this permission.
+    name: Report a failing run
+    needs: gate
+    if: always() && needs.gate.result == 'failure' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          title="CI failing on master"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The $EVENT run $url failed at $GITHUB_SHA. If a full run failed after the PR's selective run passed, record the selection miss under [[miss]] in test/impact.toml and fix the rule (CONTRIBUTING.md)."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
