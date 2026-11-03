@@ -7,9 +7,11 @@
 #   julia scripts/test_registered.jl --list              the available test files
 #   julia scripts/test_registered.jl --jobs=4 --verbose  worker count, per-file detail
 #
-# Each worker runs with HDM_TEST_THREADS Julia threads (default 2) and one BLAS thread; the
-# default worker count keeps workers × threads within the CPU threads. `--jobs=N` or
-# PTR_NUM_JOBS sets the worker count. CONTRIBUTING.md describes the testing workflow.
+# Each worker runs with HDM_TEST_THREADS Julia threads (default 2) and one BLAS thread. The
+# default worker count keeps workers × threads within the CPU threads available to this process
+# (Sys.EFFECTIVE_CPU_THREADS where Julia has it, so a container's CPU quota counts), and
+# ParallelTestRunner lowers it further when memory is short. `--jobs=N` or PTR_NUM_JOBS sets the
+# worker count. CONTRIBUTING.md describes the testing workflow.
 using HighDimensionalModels
 using ParallelTestRunner
 
@@ -23,24 +25,17 @@ testsuite = TestSuite.testsuite(inventory, @__DIR__)
 
 args = parse_args(ARGS; custom = ["only"])
 only = args.custom["only"]
-if only !== nothing && args.list === nothing
-  value = something(only)
-  names = value === nothing ? String[] : filter!(!isempty, strip.(split(value, ',')))
-  isempty(names) && error("--only needs test names, for example --only=lasso,cv")
-  unknown = filter(name -> !haskey(testsuite, name), names)
-  isempty(unknown) || error("--only: no test file $(join(unknown, ", ")); `--list` shows the names")
-  filter!(((name, _),) -> name in names, testsuite)
-end
+# `--list` shows every file, as ParallelTestRunner's own filter does.
+only !== nothing && args.list === nothing && TestSuite.select_only!(testsuite, something(only))
 filter_tests!(testsuite, args)
 isempty(testsuite) && error("no test file matches the selection: $(join(ARGS, " "))")
 
-threads = parse(Int, get(ENV, "HDM_TEST_THREADS", "2"))
-threads >= 1 || error("HDM_TEST_THREADS must be a positive integer")
+threads = TestSuite.worker_threads()
 if args.list === nothing
   selected = sort!(collect(keys(testsuite)))
   all_selected = length(selected) == length(alltests(inventory))
   commit = haskey(ENV, "GITHUB_SHA") ? ", commit $(ENV["GITHUB_SHA"])" : ""
-  cpu = "$(strip(first(Sys.cpu_info()).model)), $(Sys.CPU_THREADS) threads"
+  cpu = "$(strip(first(Sys.cpu_info()).model)), $(TestSuite.cpu_threads()) of $(Sys.CPU_THREADS) threads available"
   println("HighDimensionalModels tests: $(all_selected ? "every file" : "a selection"), ",
           "$(length(selected)) of $(length(alltests(inventory))) files; Julia $VERSION on $(Sys.MACHINE) ($cpu)$commit")
   println("  workers: $threads Julia threads and 1 BLAS thread each")
@@ -52,4 +47,4 @@ runtests(HighDimensionalModels, args; testsuite,
          # Threads exercise the threaded code paths (cross-validation folds, stability selection).
          exeflags = ["--threads=$threads"],
          init_worker_code = :(using LinearAlgebra; LinearAlgebra.BLAS.set_num_threads(1)),
-         max_default_jobs = max(1, Sys.CPU_THREADS ÷ threads))
+         max_default_jobs = TestSuite.max_workers(threads))
