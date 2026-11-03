@@ -31,11 +31,13 @@ julia scripts/test_registered.jl --jobs=4 --verbose
 
 Within Julia, `Pkg.test(test_args=["--only=glm"])` does the same. Each worker
 uses `HDM_TEST_THREADS` Julia threads (default 2) and one BLAS thread; the
-default worker count keeps workers × threads within the CPU threads, and
-`--jobs=N` or `PTR_NUM_JOBS` overrides it.
+default worker count keeps workers × threads within the CPU threads available
+to the process (a container's quota counts on Julia versions that expose it),
+and `--jobs=N` or `PTR_NUM_JOBS` overrides it.
 
-Every Julia file under `test/` is listed in `test/testsuite.toml`, and the
-runner stops if one is not. A test file must run on its own: it declares every
+Every Julia file under `test/` is listed in `test/testsuite.toml` by its exact
+path, fixture scripts in subdirectories included, and the runner stops if one
+is not. A test file must run on its own: it declares every
 `using` it needs, loads the optional backend it tests (HiGHS, ProximalAlgorithms,
 StatsModels), uses explicit RNGs or seeds its own, and does not rely on another
 file. Workers are reused, so an extension another file loaded may already be

@@ -4,8 +4,10 @@ This note records how the tests run, how a change selects its tests, and how CI 
 required. CONTRIBUTING.md has the commands; this file has the reasons. It is not part of the
 documentation site.
 
-Status: sections 1-3 are implemented with #196 (parallel runner), 4-6 with #197 (impact map and
-planner), 7-11 with #198 (CI); #195 tracks the whole.
+Status: sections 1-3 are implemented by PR #203 (#196, the parallel runner). Sections 4-11 are
+design proposals for the follow-up issues #197 (impact map and planner, sections 4-6) and #198
+(selective CI, sections 7-11); none of it exists yet. Until then every pull request and push runs
+the whole suite on the existing CI matrix. #195 tracks the whole.
 
 ## 1. Execution model
 
@@ -22,8 +24,11 @@ each file's time, compile share, GC and memory, and a summary of every testset.
   (`Base.julia_cmd()`), so CI's `--depwarn=error` and coverage apply to every file.
 - Threads: each worker has `HDM_TEST_THREADS` Julia threads (default 2, what CI used before) and
   one BLAS thread. Cross-validation folds and stability selection run threaded code; one thread
-  would leave it untested. The default worker count is `CPU threads ÷ HDM_TEST_THREADS`, clamped by
-  memory; CI uses two workers on four-core runners.
+  would leave it untested. The default worker count is the CPU budget divided by
+  `HDM_TEST_THREADS`, at least one, and PTR lowers it when memory is short. The budget is
+  `Sys.EFFECTIVE_CPU_THREADS` where Julia has it, so a container's or job's CPU quota counts rather
+  than the host's threads, and `Sys.CPU_THREADS` on Julia 1.10. `--jobs=N` or `PTR_NUM_JOBS`
+  overrides it; CI uses two workers on four-core runners.
 
 ## 2. Isolation
 
@@ -54,10 +59,16 @@ test environment, so it keeps its own environment (`scripts/test_knockoff_extens
 | `subprocess` | a fresh child process with the listed flags |
 | `not_tests` | helpers, files with their own environment, fixture generators (with a reason) |
 
-`runtests.jl` stops before running anything when a file is unclassified, listed twice, or listed
-but missing (`test/testsuite.jl`, TOML only), so a new test file cannot be skipped silently.
+Every entry is an exact path; `not_tests` accepts no patterns, so a new file in a fixture directory
+needs its own entry like any other. `runtests.jl` stops before running anything when a file is
+unclassified, listed twice, listed as both a test and a non-test, or listed but missing
+(`test/testsuite.jl`, TOML only), so a new test file cannot be skipped silently.
+`test/testsuite_validation.jl` tests each of these checks, `--only` and prefix selection, and that
+a failing child-process test fails the run.
 
-## 4. Source-to-test mapping
+## 4. Source-to-test mapping (proposed)
+
+*Sections 4-11 are proposals for #197 and #198, not current behaviour.*
 
 `test/impact.toml` is the single dependency map. It names *families* (sets of test files) and
 *rules*: a rule matches path globs and selects families, test files, extra CI jobs, or the whole
@@ -81,7 +92,7 @@ selective; that is a production refactor and is left for later.
 Every selection adds the smoke file (`test/smoke.jl`: one cheap call per estimator family), Aqua
 and the deprecation child for source changes.
 
-## 5. Change detection
+## 5. Change detection (proposed)
 
 - Pull request: the files changed between the merge commit's parents (`HEAD^1..HEAD` of the
   checked-out merge commit), so the whole PR is compared with the base it merges into, however many
@@ -92,7 +103,7 @@ and the deprecation child for source changes.
 - A failed `git` command, an empty diff on a code event, or an unparsable map: full. The planner
   never answers "no tests" because something failed.
 
-## 6. Risk policy for test changes
+## 6. Risk policy for test changes (proposed)
 
 - A changed test file selects itself (plus smoke).
 - A helper or fixture selects the files that use it (rules in the map).
@@ -103,7 +114,7 @@ and the deprecation child for source changes.
 - Source changed without a test change: reported in the plan summary.
 - Documentation only (`docs/**`, Markdown, `LICENSE`): no package tests; the gate still reports.
 
-## 7. GitHub Actions
+## 7. GitHub Actions (proposed)
 
 One workflow, `CI.yml`:
 
@@ -140,7 +151,7 @@ only where `julia-actions/cache` prunes its caches. Event data reaches scripts t
 never interpolated into a shell line. Fork PRs have no secrets and need none: coverage is not
 collected on PRs.
 
-## 8. Scheduled and release validation
+## 8. Scheduled and release validation (proposed)
 
 - Nightly (Monday to Saturday): the full registered suite on Linux, Julia lts and 1, with
   coverage on Julia 1; the Knockoffs job; master-dependency integration (full suite), which prints
@@ -152,17 +163,17 @@ collected on PRs.
 Schedules do not skip a commit that already passed: registered dependencies and dependency masters
 change between nights, so the commit alone does not identify what was tested.
 
-## 9. Coverage
+## 9. Coverage (proposed)
 
 Collected only in full runs (nightly and weekly Julia 1 Linux job, and the Knockoffs job for the
 extension), so every upload comes from the same, complete suite. Selective PR runs collect none.
 
-## 10. Performance measurement
+## 10. Performance measurement (proposed)
 
 PTR prints per-file wall, compile, GC and RSS figures; the CI test step's job summary lists them.
 The comparison with the sequential runner is in the PR descriptions. No CI step asserts on time.
 
-## 11. Failure handling and audit
+## 11. Failure handling and audit (proposed)
 
 - The plan job fails (and so the gate) on an invalid inventory or map, rather than guessing.
 - The nightly and weekly full runs are the audit of the map. When a full run fails on a commit
