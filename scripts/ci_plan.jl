@@ -6,8 +6,9 @@
 #   julia scripts/ci_plan.jl --event=pull_request   in CI (see .github/workflows/CI.yml)
 #
 # It prints the plan and its reasons. With --github-output and --summary it also writes the CI
-# outputs and a Markdown job summary. When the changes cannot be determined it plans the full
-# suite; it never plans "no tests" because something failed.
+# outputs and a Markdown job summary. When the changes or the tracked files cannot be determined
+# it plans the full suite; it never plans "no tests" because something failed. An unclassified test
+# file, an invalid map, or a source file whose rules select no tests is an error.
 module CIPlan
 
 using TOML
@@ -55,6 +56,15 @@ struct Plan
   notes::Vector{String}
   coverage::Bool
 end
+
+# `*` matches within a path segment, `**` across segments.
+function glob_regex(glob::AbstractString)
+  parts = split(glob, "**")
+  inner = map(p -> join(map(s -> replace(s, r"[\\^$.|?+()\[\]{}]" => x -> "\\" * x), split(p, '*')), "[^/]*"), parts)
+  return Regex("^" * join(inner, ".*") * "\$")
+end
+
+matches(glob, path) = occursin(glob_regex(glob), path)
 
 levelrank(level) = something(findfirst(==(level), LEVELS), 0)
 maxlevel(a, b) = levelrank(a) >= levelrank(b) ? a : b
@@ -120,15 +130,30 @@ function validate(impact::Impact, inventory::TestSuite.Inventory, where)
   return impact
 end
 
-"Source and extension files without a rule of level focused or above (should be none)."
-function unmapped_sources(impact::Impact, files)
-  filter(files) do f
-    (startswith(f, "src/") || startswith(f, "ext/")) || return false
-    !any(r -> r.level != "none" && any(g -> TestSuite.matches(g, f), r.paths), impact.rules)
-  end
-end
-
 ispackagecode(path) = startswith(path, "src/") || startswith(path, "ext/")
+
+"""
+    source_problems(impact, files) -> Vector{String}
+
+One message for each source or extension file in `files` whose rules, taken together, do not
+select its tests. The rules matching a file must include a full rule, or focused and broad rules
+naming at least one family or test between them; a rule that only adds jobs may accompany them.
+A none rule never covers package code. Otherwise a change to the file would run only the smoke
+test and the package-wide checks.
+"""
+function source_problems(impact::Impact, files)
+  problems = String[]
+  for f in files
+    ispackagecode(f) || continue
+    rules = [r for r in impact.rules if r.level != "none" && any(g -> matches(g, f), r.paths)]
+    if isempty(rules)
+      push!(problems, "$f has no rule: add one naming the families or tests that exercise it")
+    elseif !any(r -> r.level == "full" || !isempty(r.families) || !isempty(r.tests), rules)
+      push!(problems, "$f: its rules select no families or tests, so a change would run only the smoke and package-wide checks")
+    end
+  end
+  return problems
+end
 testname(path) = (m = match(r"^test/(.+)\.jl$", path)) === nothing ? nothing : String(m[1])
 
 """
@@ -153,7 +178,7 @@ function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inve
     paths = c.status == 'R' ? [c.old, c.path] : [c.path]
     for (k, path) in enumerate(paths)
       deleted = c.status == 'D' || (c.status == 'R' && k == 1)
-      matched = [r for r in impact.rules if any(g -> TestSuite.matches(g, path), r.paths)]
+      matched = [r for r in impact.rules if any(g -> matches(g, path), r.paths)]
       name = testname(path)
       why = String[]
       if deleted && (ispackagecode(path) || name !== nothing)
@@ -170,7 +195,8 @@ function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inve
           push!(why, isempty(added) ? "The test inventory changed without changing what runs." :
                      "The test inventory adds $(join(added, ", ")).")
         end
-      elseif name !== nothing && name in alltests && isempty(matched)
+      elseif name !== nothing && name in alltests
+        # Itself, and whatever a rule for its directory adds (test/data/**).
         level = maxlevel(level, "focused")
         push!(tests, name)
         push!(why, "Test file changed: it runs itself.")
@@ -232,10 +258,22 @@ end
 
 # ---- git -----------------------------------------------------------------------------------
 
+"The output of a git command, or `nothing` if it fails or git cannot be started."
 function git(args::AbstractVector{<:AbstractString}; dir = ROOT)
   out = IOBuffer()
-  ok = success(pipeline(Cmd(`git -C $dir $args`; ignorestatus = true); stdout = out, stderr = devnull))
+  ok = try
+    success(pipeline(Cmd(`git -C $dir $args`; ignorestatus = true); stdout = out, stderr = devnull))
+  catch err
+    err isa Base.IOError || rethrow()
+    false
+  end
   return ok ? String(take!(out)) : nothing
+end
+
+"The tracked files of the repository at `dir`, or `nothing` if git cannot list them."
+function tracked_files(dir = ROOT)
+  text = git(["ls-files"]; dir)
+  return text === nothing ? nothing : String.(split(text, '\n'; keepempty = false))
 end
 
 "Parse `git diff --name-status -M` output; `nothing` if a line is malformed."
@@ -338,18 +376,37 @@ function option(args, name, default = nothing)
 end
 
 """
-    compute(args) -> Plan
+    compute(args; dir, list_files = tracked_files) -> Plan
 
 `--event=` local (default), pull_request, push, schedule, workflow_dispatch or tag;
 `--base=`/`--head=` the revisions to compare; `--schedule=` nightly or weekly; `--full`.
+
+Throws if a test file is unclassified, the map is invalid, or a source file's rules select no
+tests. If `list_files(dir)` returns `nothing` (git cannot list the tracked files), that last
+check cannot be made and the plan is the full suite.
 """
-function compute(args; dir = ROOT)
+function compute(args; dir = ROOT, list_files = tracked_files)
   inventory = TestSuite.load(joinpath(dir, "test", "testsuite.toml"))
   TestSuite.check(inventory, TestSuite.discover(joinpath(dir, "test")))
   impact = load_impact(joinpath(dir, "test", "impact.toml"), inventory)
-  files = split(something(git(["ls-files"]; dir), ""), '\n'; keepempty = false)
-  missing = unmapped_sources(impact, files)
-  isempty(missing) || error("test/impact.toml has no rule for $(join(missing, ", "))")
+  files = list_files(dir)
+  if files === nothing
+    return audit_failed(plan_event(args, impact, inventory, dir))
+  end
+  problems = source_problems(impact, files)
+  isempty(problems) || error("test/impact.toml does not select tests for every source file:\n  " * join(problems, "\n  "))
+  return plan_event(args, impact, inventory, dir)
+end
+
+const AUDIT_FAILED = "git could not list the tracked files, so the source files were not checked against test/impact.toml: the full suite runs."
+
+"`p` widened to the full suite because the source-map check could not be made."
+function audit_failed(p::Plan)
+  jobs = sort!(union(p.jobs, FULL_JOBS))
+  Plan("full", nothing, jobs, vcat([("(source map check)", AUDIT_FAILED)], p.reasons), vcat([AUDIT_FAILED], p.notes), p.coverage)
+end
+
+function plan_event(args, impact, inventory, dir)
   event = option(args, "event", "local")
   if event == "schedule"
     schedule = option(args, "schedule", "")

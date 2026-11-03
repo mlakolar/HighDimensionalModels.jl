@@ -2,7 +2,9 @@
 #
 # The planner takes the union of every rule that matches every changed path; the order of the
 # rules does not matter. A path no rule matches selects the full suite, and so does a deleted or
-# renamed source or test file. A changed test file of test/testsuite.toml selects itself.
+# renamed source or test file. A changed test file of test/testsuite.toml selects itself, and
+# any rule matching its path adds to that. Every file under src/ and ext/ must be matched by a
+# full rule or by rules naming at least one family or test (scripts/ci_plan.jl checks this).
 # `*` matches within a path segment, `**` across segments.
 #
 # Levels: none (no package tests) < focused < broad < full (every test file). A rule selects its
@@ -34,6 +36,7 @@ inference = ["hdm", "hdm_golden", "hdm_effect"]
 varying = ["varying", "naming"]
 interfaces = ["statsapi", "formula"]
 planner = ["ci_plan"]
+inventory = ["testsuite_validation"]
 
 # ---- Shared source: nearly every estimator calls it --------------------------------------
 
@@ -199,6 +202,12 @@ reason = "Deprecated names and the CDOptions/CDInfo property shims."
 paths = ["test/runtests.jl", "test/testsuite.jl"]
 level = "full"
 reason = "The test runner and the inventory checks."
+
+[[rules]]
+paths = ["test/testsuite.toml"]
+level = "focused"
+families = ["inventory"]
+reason = "The test inventory: its validation tests load and check it (what the change adds to the run is decided above)."
 
 [[rules]]
 paths = ["test/impact.toml"]
