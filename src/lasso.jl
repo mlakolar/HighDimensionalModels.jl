@@ -1052,3 +1052,4 @@ function LassoPath(
   T, Xf, Yf = _float_data(X, Y)
   LassoPath(Xf, Yf, options; kwargs...)
 end
+# CI scenario: a comment-only change to src/lasso.jl.
