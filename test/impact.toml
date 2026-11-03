@@ -16,8 +16,9 @@
 
 # Run with every plan that runs tests.
 smoke = ["smoke"]
-# Run whenever a file under src/ or ext/ changes: the package-wide checks.
-source = ["aqua", "deprecated"]
+# Run whenever a file under src/ or ext/ changes: the package-wide checks, and the numerical
+# contracts (precision, extremes, iteration limits, mutation), which span nearly every family.
+source = ["aqua", "deprecated", "numerics_contracts", "numerics_extremes", "numerics_types"]
 
 [families]
 lasso_api = ["coordinate_descent", "lasso", "naming", "penalties", "bounds"]

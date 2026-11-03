@@ -67,8 +67,8 @@ end
   @testset "focused source file: structured" begin
     pl = p(M("src/structured.jl"))
     @test pl.level == "focused"
-    @test selected(pl) == Set(["structured", "structured_kernels", "structured_golden", "structured_cv_masked",
-                               "smoke", "aqua", "deprecated"])
+    @test selected(pl) == union(Set(["structured", "structured_kernels", "structured_golden", "structured_cv_masked", "smoke"]),
+                                IMPACT.source)
     @test pl.jobs == ["examples", "test"]
   end
 
@@ -180,7 +180,7 @@ end
       write_outputs(out, p(M("src/structured.jl")))
       lines = readlines(out)
       @test "level=focused" in lines && "ok=true" in lines && "jobs=examples test" in lines
-      @test "tests=aqua,deprecated,smoke,structured,structured_cv_masked,structured_golden,structured_kernels" in lines
+      @test "tests=" * join(sort!(union(["smoke", "structured", "structured_cv_masked", "structured_golden", "structured_kernels"], IMPACT.source)), ",") in lines
       write(out, ""); write_outputs(out, p(M("src/utils.jl")))
       @test "tests=all" in readlines(out)
       write(out, ""); write_outputs(out, p(M("README.md")))
