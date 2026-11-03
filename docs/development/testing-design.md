@@ -115,7 +115,7 @@ One workflow, `CI.yml`:
 | `master-integration` | the change touches the ProximalBase/ProximalSolvers interface; nightly |
 | `knockoff-extension` (lts, 1) | knockoff sources, the Knockoffs extension, full changes |
 | `examples` | the public APIs the examples use, `examples/**`; full plans; weekly |
-| `report` | a failing non-PR run: opens or comments on "CI failing on master" |
+| `report` | a failing run on master (push, schedule, manual) or a tag: opens or comments on "CI failing on master"; not a manual run on another branch |
 | `gate` | always (`if: always()`), named `gate` on pull requests |
 
 The test jobs run the selected files with two workers in one job per Julia version, which shares
