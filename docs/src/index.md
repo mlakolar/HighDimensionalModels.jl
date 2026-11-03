@@ -115,3 +115,5 @@ suite with registered dependencies on Julia 1.10 and newer. In a separate
 checkout, `julia scripts/test_master.jl` checks integration with dependency
 master checkouts. The repository's
 `CONTRIBUTING.md` describes the naming convention and bootstrap scripts.
+
+<!-- CI scenario: documentation only -->
