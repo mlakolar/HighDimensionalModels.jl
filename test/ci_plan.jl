@@ -246,7 +246,7 @@ end
     # Every job the workflow defines is a known job, and the gate needs all of them.
     workflow = joinpath(ROOT, ".github", "workflows", "CI.yml")
     if isfile(workflow)
-      text = read(workflow, String)
+      text = replace(read(workflow, String), "\r\n" => "\n")   # Windows checkouts have CRLF line endings
       needs = match(r"\n  gate:\n(?:.*\n)*?    needs: \[([^\]]*)\]", text)
       @test needs !== nothing && Set(strip.(split(needs[1], ','))) == Set(["plan"; collect(jobs)])
       for j in jobs
