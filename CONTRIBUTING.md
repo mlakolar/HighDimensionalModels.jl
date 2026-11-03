@@ -45,6 +45,35 @@ loaded; tests of behaviour without an extension belong in
 `test/extensions_absent.jl`, which runs in a fresh process. The design and its
 reasons are in `docs/development/testing-design.md`.
 
+### Tests affected by a change
+
+`test/impact.toml` maps source, test, fixture and infrastructure paths to the
+test files they can affect; `scripts/ci_plan.jl` turns a diff into a plan and
+prints the reasons. To run what your local changes (committed, uncommitted and
+untracked, since the merge base with `origin/master`) can affect:
+
+```sh
+julia scripts/test_affected.jl              # plan, then run the selected files
+julia scripts/test_affected.jl --dry-run    # the plan only
+julia scripts/test_affected.jl --base=HEAD~2 --jobs=4
+```
+
+A plan runs the selected families plus `test/smoke.jl`, and Aqua and the
+deprecation test when package code changed. Shared code (`src/utils.jl`,
+`src/losses.jl`, `src/lasso.jl`, `src/penalties.jl`, `src/statsapi.jl`, the
+module file), `Project.toml`, the runner, the planner and CI select every file;
+so does a path no rule matches, and a deleted or renamed source or test file.
+A changed test file selects itself; adding a parallel test file to
+`test/testsuite.toml` selects it.
+
+When you add a source file, add a rule for it to `test/impact.toml`, naming the
+families or tests that call into it, directly or through other source files; the
+planner stops on a source file without such a rule, and on one whose rules only
+add CI jobs. When you add a test file, put it in a family. Selection is a
+convenience, not proof: full runs are the check (today CI runs every file), and
+a failure one finds that a selective run missed is a bug in the map, recorded
+under `[[miss]]` in `test/impact.toml`.
+
 For examples or documentation, run `julia scripts/instantiate_release.jl examples`
 or `julia scripts/instantiate_release.jl docs`, respectively. These environments
 use this checkout and registered runtime dependencies, with KernelSmoothing

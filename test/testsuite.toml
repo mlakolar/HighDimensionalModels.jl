@@ -11,6 +11,7 @@
 parallel = [
   "aqua",
   "bounds",
+  "ci_plan",
   "coordinate_descent",
   "cv",
   "cv_glm",
@@ -45,6 +46,7 @@ parallel = [
   "selection_golden",
   "slope_calibration",
   "slope_sparse",
+  "smoke",
   "sparsegroup",
   "statsapi",
   "structured",

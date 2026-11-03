@@ -1,0 +1,337 @@
+# Which tests a change can affect: read by scripts/ci_plan.jl (CI and scripts/test_affected.jl).
+#
+# The planner takes the union of every rule that matches every changed path; the order of the
+# rules does not matter. A path no rule matches selects the full suite, and so does a deleted or
+# renamed source or test file. A changed test file of test/testsuite.toml selects itself, and
+# any rule matching its path adds to that. Every file under src/ and ext/ must be matched by a
+# full rule or by rules naming at least one family or test (scripts/ci_plan.jl checks this).
+# `*` matches within a path segment, `**` across segments.
+#
+# Levels: none (no package tests) < focused < broad < full (every test file). A rule selects its
+# families and tests; full selects everything. `jobs` adds CI jobs beyond the Linux test jobs:
+# master-integration (dependency master checkouts), knockoff-extension, examples, test-cross
+# (macOS and Windows). A full plan runs every job but test-cross.
+#
+# The map was built by reading which source files call which internal helpers, not from
+# coverage. When a full run catches a failure that a selective run missed, fix the rule here and
+# record it under [[miss]] at the end.
+
+# Run with every plan that runs tests.
+smoke = ["smoke"]
+# Run whenever a file under src/ or ext/ changes: the package-wide checks.
+source = ["aqua", "deprecated"]
+
+[families]
+lasso_api = ["coordinate_descent", "lasso", "naming", "penalties", "bounds"]
+cv = ["cv", "cv_glm"]
+glm = ["glm", "glm_penalties", "bounds", "cv_glm", "penalties"]
+quantile = ["quantile", "quantile_tuning", "quantile_path_stop", "quantile_refit", "extensions_absent"]
+group = ["group", "sparsegroup"]
+multitask = ["multiresponse", "multitask", "multitask_speed", "multitask_penalties", "multitask_dirty", "transfer"]
+lowrank = ["lowrank", "lowrank_golden", "lowrank_solvers", "lowrank_panoc_costs", "lowrank_conditioning",
+           "lowrank_sparse", "lowrank_plus_sparse", "extensions_absent"]
+structured = ["structured", "structured_kernels", "structured_golden", "structured_cv_masked"]
+selection = ["selection", "selection_golden", "slope_sparse", "slope_calibration", "knockoff_construction"]
+inference = ["hdm", "hdm_golden", "hdm_effect"]
+varying = ["varying", "naming"]
+interfaces = ["statsapi", "formula"]
+planner = ["ci_plan"]
+inventory = ["testsuite_validation"]
+
+# ---- Shared source: nearly every estimator calls it --------------------------------------
+
+[[rules]]
+paths = ["src/HighDimensionalModels.jl", "src/utils.jl", "src/losses.jl", "src/penalties.jl"]
+level = "full"
+reason = "Shared core: the module's includes and imports, options and data checks, the losses, and the penalty levels every lasso and GLM solve uses."
+
+[[rules]]
+paths = ["src/lasso.jl"]
+level = "full"
+reason = "lasso, LassoPath, _loadings and _usegram are called by eleven estimator families (GLM, quantile, multitask, low-rank, selection, inference, structured, varying...)."
+
+[[rules]]
+paths = ["src/statsapi.jl"]
+level = "full"
+reason = "StatsAPI methods for about twenty result types, and _checkcolumns, _addoffset! and the prediction helpers used by most estimators."
+
+# ---- Broad: shared code with bounded consumers -------------------------------------------
+
+[[rules]]
+paths = ["src/cv.jl"]
+level = "broad"
+families = ["cv", "lasso_api", "glm", "interfaces", "multitask", "lowrank", "quantile", "structured"]
+jobs = ["examples"]
+reason = "_runfolds, _foldlabels and _cvsummary serve every cross-validated path (lasso, GLM, multitask, low-rank, quantile, structured)."
+
+[[rules]]
+paths = ["src/glm.jl"]
+level = "broad"
+families = ["glm", "cv", "quantile", "interfaces"]
+tests = ["statsapi"]
+jobs = ["examples", "master-integration"]
+reason = "GLM estimators; CVGLMLassoPath, the GLM StatsAPI methods and the smoothed quantile path (GLMLassoPath) call them; proximal Newton comes from ProximalSolvers."
+
+[[rules]]
+paths = ["src/multiresponse.jl", "src/multitask.jl", "src/multitask_rows.jl"]
+level = "broad"
+families = ["multitask", "lowrank", "interfaces"]
+jobs = ["examples"]
+reason = "multi_lasso delegates to multitask_lasso; _activerows and the row solver are used by the dirty, transfer and low-rank (sparse, plus-sparse) estimators."
+
+[[rules]]
+paths = ["src/precompile.jl"]
+level = "broad"
+families = ["lasso_api", "glm"]
+reason = "The precompile workload (lasso, paths, GLM, coordinate descent) runs when the package is compiled; a failure there breaks loading."
+
+[[rules]]
+paths = ["src/coordinate_descent.jl"]
+level = "broad"
+families = ["lasso_api", "group"]
+tests = ["slope_sparse"]
+jobs = ["examples", "master-integration"]
+reason = "The public coordinate-descent interface over ProximalSolvers, used by the group, SLOPE and custom-loss examples."
+
+# ---- Focused: one family and its direct consumers ----------------------------------------
+
+[[rules]]
+paths = ["src/quantile.jl", "src/quantile_tuning.jl", "ext/HighDimensionalModelsHiGHSExt.jl"]
+level = "focused"
+families = ["quantile"]
+reason = "Quantile regression, its tuning, and the exact HiGHS backend."
+
+[[rules]]
+paths = ["src/group.jl"]
+level = "focused"
+families = ["group", "interfaces"]
+tests = ["varying"]
+jobs = ["examples"]
+reason = "Group lasso; sparse group lasso uses _activegroups and _check_groups, and varying_coefficient calls group_lasso."
+
+[[rules]]
+paths = ["src/sparsegroup.jl"]
+level = "focused"
+families = ["group", "interfaces"]
+reason = "Sparse group lasso and its formula method."
+
+[[rules]]
+paths = ["src/multitask_dirty.jl"]
+level = "focused"
+tests = ["multitask_dirty", "transfer"]
+jobs = ["examples"]
+reason = "The dirty model; transfer calls its _row_value and _row_prox!."
+
+[[rules]]
+paths = ["src/transfer.jl"]
+level = "focused"
+tests = ["transfer"]
+jobs = ["examples"]
+reason = "Joint-sparse transfer learning (no other source file calls it)."
+
+[[rules]]
+paths = ["src/lowrank.jl", "src/sparse_svd.jl", "ext/HighDimensionalModelsProximalAlgorithmsExt.jl"]
+level = "focused"
+families = ["lowrank"]
+reason = "Low-rank regression; sparse SVD, the sparse and plus-sparse fits and the PANOC extension use its _lr_* helpers."
+
+[[rules]]
+paths = ["src/lowrank_sparse.jl"]
+level = "focused"
+families = ["lowrank"]
+jobs = ["examples", "master-integration"]
+reason = "Sparse nuclear regression (ProximalBase prox methods for its losses); the plus-sparse fit and PenaltyGrid call it."
+
+[[rules]]
+paths = ["src/penalty_grid.jl", "src/lowrank_plus_sparse.jl"]
+level = "focused"
+tests = ["lowrank_sparse", "lowrank_plus_sparse"]
+jobs = ["examples"]
+reason = "PenaltyGrid and the low-rank plus sparse model."
+
+[[rules]]
+paths = ["src/structured.jl", "src/structured_cv.jl"]
+level = "focused"
+families = ["structured"]
+jobs = ["examples"]
+reason = "Fused lasso, trend filtering and the generalized lasso, with their masked cross-validation."
+
+[[rules]]
+paths = ["src/hdm.jl"]
+level = "focused"
+families = ["inference", "interfaces"]
+tests = ["varying"]
+reason = "rlasso, post-lasso and double selection; varying.jl uses _qnorm and the formula method calls rlasso."
+
+[[rules]]
+paths = ["src/varying.jl"]
+level = "focused"
+families = ["varying"]
+jobs = ["examples"]
+reason = "Varying-coefficient models."
+
+[[rules]]
+paths = ["src/slope.jl", "src/stability.jl"]
+level = "focused"
+families = ["selection"]
+reason = "SLOPE and stability selection."
+
+[[rules]]
+paths = ["src/knockoffs.jl", "src/knockoff_construction.jl", "ext/HighDimensionalModelsKnockoffsExt.jl"]
+level = "focused"
+families = ["selection"]
+jobs = ["knockoff-extension"]
+reason = "Knockoff construction and filtering; the Knockoffs extension adds optimizer strategies (own environment)."
+
+[[rules]]
+paths = ["src/formula.jl", "ext/HighDimensionalModelsStatsModelsExt.jl"]
+level = "focused"
+families = ["interfaces", "group", "cv", "glm"]
+tests = ["hdm"]
+reason = "FormulaFit and the StatsModels methods of lasso, sqrt_lasso, glm_lasso, the group lassos, rlasso and fit."
+
+[[rules]]
+paths = ["src/deprecated.jl"]
+level = "focused"
+tests = ["deprecated", "coordinate_descent", "naming"]
+reason = "Deprecated names and the CDOptions/CDInfo property shims."
+
+# ---- Tests, fixtures and test infrastructure ---------------------------------------------
+
+[[rules]]
+paths = ["test/runtests.jl", "test/testsuite.jl"]
+level = "full"
+reason = "The test runner and the inventory checks."
+
+[[rules]]
+paths = ["test/testsuite.toml"]
+level = "focused"
+families = ["inventory"]
+reason = "The test inventory: its validation tests load and check it (what the change adds to the run is decided above)."
+
+[[rules]]
+paths = ["test/impact.toml"]
+level = "focused"
+families = ["planner"]
+reason = "The impact map: the planner validates it, and its tests check every source file and test has a rule."
+
+[[rules]]
+paths = ["test/kernels.jl"]
+level = "focused"
+tests = ["naming", "varying"]
+reason = "Test kernels included by naming.jl and varying.jl."
+
+[[rules]]
+paths = ["test/data/hdm/**"]
+level = "focused"
+tests = ["hdm_golden"]
+reason = "hdm golden fixtures."
+
+[[rules]]
+paths = ["test/data/lowrank/**"]
+level = "focused"
+tests = ["lowrank_golden"]
+reason = "rrpack golden fixtures."
+
+[[rules]]
+paths = ["test/data/lowrank_sparse/**"]
+level = "focused"
+tests = ["lowrank_sparse"]
+reason = "Sparse nuclear regression oracle fixtures."
+
+[[rules]]
+paths = ["test/data/lowrank_plus_sparse/**"]
+level = "focused"
+tests = ["lowrank_plus_sparse"]
+reason = "Low-rank plus sparse oracle fixtures."
+
+[[rules]]
+paths = ["test/data/multitask/**"]
+level = "focused"
+tests = ["multitask_penalties"]
+reason = "Multitask penalty oracle fixtures."
+
+[[rules]]
+paths = ["test/data/multitask_dirty/**"]
+level = "focused"
+tests = ["multitask_dirty"]
+reason = "Dirty model oracle fixtures."
+
+[[rules]]
+paths = ["test/data/transfer/**"]
+level = "focused"
+tests = ["transfer"]
+reason = "Transfer oracle fixtures."
+
+[[rules]]
+paths = ["test/data/selection/**"]
+level = "focused"
+tests = ["selection_golden"]
+reason = "Selection golden fixtures."
+
+[[rules]]
+paths = ["test/golden/structured/**"]
+level = "focused"
+tests = ["structured_golden"]
+reason = "Structured path golden fixtures."
+
+[[rules]]
+paths = ["test/knockoff_extension.jl", "scripts/test_knockoff_extension.jl"]
+level = "focused"
+jobs = ["knockoff-extension"]
+reason = "The Knockoffs extension tests, in their own environment."
+
+# ---- Dependencies, scripts, CI ------------------------------------------------------------
+
+[[rules]]
+paths = ["Project.toml"]
+level = "full"
+jobs = ["test-cross"]
+reason = "Dependencies and compatibility bounds: every test, on every platform."
+
+[[rules]]
+paths = ["scripts/test_registered.jl", "scripts/ci_plan.jl"]
+level = "full"
+reason = "The registered test entry point and the test planner."
+
+[[rules]]
+paths = [".github/workflows/CI.yml"]
+level = "full"
+jobs = ["test-cross"]
+reason = "The CI workflow: every job runs, so each changed path of it is exercised."
+
+[[rules]]
+paths = ["scripts/test_master.jl", "scripts/master_dependencies.jl", "scripts/instantiate.jl"]
+level = "focused"
+jobs = ["master-integration"]
+reason = "The master-dependency environment."
+
+[[rules]]
+paths = ["scripts/instantiate_release.jl", "examples/**"]
+level = "focused"
+jobs = ["examples"]
+reason = "The examples and their environment."
+
+[[rules]]
+paths = ["scripts/check_naming.py", "scripts/test_affected.jl"]
+level = "focused"
+reason = "The naming check (run by the plan job) and the local affected-tests script."
+
+[[rules]]
+paths = ["docs/**", "**.md", "LICENSE", ".gitignore", ".github/workflows/Documentation.yml",
+         ".github/workflows/CompatHelper.yml", ".github/workflows/TagBot.yml"]
+level = "none"
+reason = "Documentation and other workflows: no package test."
+
+[[rules]]
+paths = ["benchmark/**"]
+level = "none"
+reason = "The benchmark harness is not package code; its own checks are tracked in #138."
+
+# ---- Known selection misses ---------------------------------------------------------------
+# One entry per failure that a full run caught after a selective run missed it:
+# [[miss]]
+# commit = "<sha of the change>"
+# test = "<test file that failed>"
+# cause = "why the rule did not select it"
+# fix = "the rule change (and the planner test reproducing it)"
