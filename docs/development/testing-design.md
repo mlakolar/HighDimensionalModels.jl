@@ -4,6 +4,9 @@ This note records how the tests run, how a change selects its tests, and how CI 
 required. CONTRIBUTING.md has the commands; this file has the reasons. It is not part of the
 documentation site.
 
+Status: sections 1-3 are implemented with #196 (parallel runner), 4-6 with #197 (impact map and
+planner), 7-11 with #198 (CI); #195 tracks the whole.
+
 ## 1. Execution model
 
 `test/runtests.jl` runs the test files with
