@@ -40,4 +40,7 @@ _read_options_cd(o) = o.options_cd
   fit = varying_coefficient(X, z, y, [0.3, 0.7]; kernel=GaussianKernel(), bandwidth=0.3, degree=Int32(1))
   @test size(coef(fit)) == (3, 2)
 end
+@testset "CI scenario: a failing required test" begin
+  @test 1 == 2
+end
 end
