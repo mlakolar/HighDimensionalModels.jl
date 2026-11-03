@@ -54,5 +54,7 @@ if !("--setup-only" in ARGS)
     depwarn in ("yes", "no", "error") || error("invalid JULIA_TEST_DEPWARN")
     coverage = get(ENV, "JULIA_TEST_COVERAGE", "false") == "true" ? "user" : "none"
     test_file = joinpath(package_root, "test", "runtests.jl")
-    run(`$(Base.julia_cmd()) --startup-file=no --check-bounds=yes --depwarn=$depwarn --code-coverage=$coverage --project=$environment $test_file`)
+    # Other arguments select test files, as for test/runtests.jl (e.g. `--only=lasso,cv`).
+    test_args = filter(!=("--setup-only"), ARGS)
+    run(`$(Base.julia_cmd()) --startup-file=no --check-bounds=yes --depwarn=$depwarn --code-coverage=$coverage --project=$environment $test_file $test_args`)
 end
