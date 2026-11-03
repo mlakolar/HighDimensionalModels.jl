@@ -1,4 +1,4 @@
-using Test, Random, LinearAlgebra, SparseArrays, StatsAPI, Statistics
+using HighDimensionalModels, Test, Random, LinearAlgebra, SparseArrays, StatsAPI, Statistics
 import ProximalBase
 
 # Test-local FastProxSL1 (Bogdan et al., Algorithm 4), using block sums and lengths.

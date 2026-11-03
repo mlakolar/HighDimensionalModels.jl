@@ -1,4 +1,5 @@
-# A fresh process verifies installation without loading the optional backend.
+# Verifies, in a fresh process, the behaviour when the optional backends HiGHS
+# and ProximalAlgorithms are not loaded.
 using HighDimensionalModels, Random, Test
 @testset "quantile API without HiGHS loaded" begin
   @test Base.get_extension(HighDimensionalModels,:HighDimensionalModelsHiGHSExt) === nothing
@@ -18,4 +19,9 @@ using HighDimensionalModels, Random, Test
   end
   @test err isa ArgumentError
   @test occursin("requires the optional HiGHS backend",sprint(showerror,err))
+end
+
+@testset "low-rank API without ProximalAlgorithms loaded" begin
+  @test Base.get_extension(HighDimensionalModels,:HighDimensionalModelsProximalAlgorithmsExt) === nothing
+  @test_throws ArgumentError nuclear_regression(ones(3, 2), ones(3, 2), 0.1; solver = :panoc)
 end
