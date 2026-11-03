@@ -1,3 +1,4 @@
+using HighDimensionalModels, Test
 using LinearAlgebra, Random, Statistics, SparseArrays
 
 @testset "Low-rank multivariate regression" begin
@@ -147,7 +148,6 @@ using LinearAlgebra, Random, Statistics, SparseArrays
   @test sn.B ≈ nuclear_regression(Q,Z,0.05;intercept=false).B atol=1e-5
 end
 
-include("lowrank_golden.jl")
 
 @testset "fixed-rank residuals through thin factors" begin
   rng = Xoshiro(101026)
@@ -168,5 +168,3 @@ include("lowrank_golden.jl")
     end
   end
 end
-include("lowrank_solvers.jl")
-include("lowrank_conditioning.jl")

@@ -1,3 +1,4 @@
+using HighDimensionalModels, Test
 using HiGHS, Random, LinearAlgebra, SparseArrays
 const QSMOI = HiGHS.MOI
 

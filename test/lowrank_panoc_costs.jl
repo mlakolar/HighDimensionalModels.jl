@@ -1,3 +1,7 @@
+using HighDimensionalModels, Test, LinearAlgebra, Random, Statistics
+using ProximalAlgorithms
+import ProximalBase
+
 @testset "PANOC loss arithmetic, cancellation and returned diagnostics" begin
   H = HighDimensionalModels
   ext = Base.get_extension(H, :HighDimensionalModelsProximalAlgorithmsExt)

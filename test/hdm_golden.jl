@@ -2,6 +2,9 @@ module HDMGoldenTest
 
 using HighDimensionalModels, DelimitedFiles, LinearAlgebra, Random, Statistics, Test
 
+# Frozen baselines were generated with one BLAS thread; pin it so atol 1e-12 holds in any order.
+BLAS.set_num_threads(1)
+
 const ROOT = joinpath(@__DIR__, "data", "hdm")
 const DATASETS = ("hetero", "highdim", "forced", "nearthreshold", "empty")
 

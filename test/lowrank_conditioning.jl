@@ -1,3 +1,4 @@
+using HighDimensionalModels, Test
 using LinearAlgebra, Random, Statistics
 
 function lr_conditioning_design(T = Float64)

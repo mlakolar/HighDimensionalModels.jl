@@ -1,0 +1,79 @@
+# Every Julia file under test/ (other than runtests.jl) is listed here exactly once, by its
+# path relative to test/ without `.jl`, including files in subdirectories; there are no
+# patterns. test/runtests.jl stops before running anything when a file is unclassified, listed
+# twice, or listed but missing (test/testsuite.jl).
+#
+# A test file must run on its own: it declares every `using` it needs, loads the optional
+# backends it tests (HiGHS, ProximalAlgorithms, StatsModels), and does not rely on another
+# file's definitions or on an extension being absent (workers are reused across files).
+
+# Each runs in a fresh module on a worker process, concurrently with the others.
+parallel = [
+  "aqua",
+  "bounds",
+  "coordinate_descent",
+  "cv",
+  "cv_glm",
+  "formula",
+  "glm",
+  "glm_penalties",
+  "group",
+  "hdm",
+  "hdm_effect",
+  "hdm_golden",
+  "knockoff_construction",
+  "lasso",
+  "lowrank",
+  "lowrank_conditioning",
+  "lowrank_golden",
+  "lowrank_panoc_costs",
+  "lowrank_plus_sparse",
+  "lowrank_solvers",
+  "lowrank_sparse",
+  "multiresponse",
+  "multitask",
+  "multitask_dirty",
+  "multitask_penalties",
+  "multitask_speed",
+  "naming",
+  "penalties",
+  "quantile",
+  "quantile_path_stop",
+  "quantile_refit",
+  "quantile_tuning",
+  "selection",
+  "selection_golden",
+  "slope_calibration",
+  "slope_sparse",
+  "sparsegroup",
+  "statsapi",
+  "structured",
+  "structured_cv_masked",
+  "structured_golden",
+  "structured_kernels",
+  "testsuite_validation",
+  "transfer",
+  "varying",
+]
+
+# Run one at a time after the parallel batch. None today: no test file needs a whole machine.
+serial = []
+
+# Each runs in a fresh child process with these flags added after the worker's own.
+[subprocess]
+# @test_deprecated needs deprecation warnings, not errors.
+deprecated = ["--depwarn=yes"]
+# The error messages when HiGHS or ProximalAlgorithms is installed but not loaded.
+extensions_absent = ["--depwarn=error"]
+
+# Julia files that are not test files, each with the reason. A new file in a fixture
+# directory must be added here or to a list above like any other.
+[not_tests]
+"testsuite" = "this inventory's loader and checks (test/testsuite.jl)"
+"kernels" = "the TestKernels helper module, included by naming.jl and varying.jl"
+"knockoff_extension" = "needs Knockoffs in its own environment: scripts/test_knockoff_extension.jl"
+"data/hdm/golden_data" = "generates the hdm_golden.jl input fixtures; run by hand (test/data/hdm/README.md)"
+"data/hdm/baseline" = "generates the hdm_golden.jl baseline fixtures; run by hand (test/data/hdm/README.md)"
+"data/lowrank/oracle" = "generates the low-rank inputs and compares the R fits; run by hand (test/data/lowrank/README.md)"
+"data/selection/golden" = "runs selection_golden.jl against regenerated fixtures; run by hand (test/data/selection/README.md)"
+"golden/structured/check_golden" = "runs structured_golden.jl against regenerated fixtures; run by hand (test/golden/structured/README.md)"

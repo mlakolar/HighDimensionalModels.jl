@@ -1,9 +1,5 @@
-@testset "Optional PANOC loading" begin
-  if Base.get_extension(HighDimensionalModels, :HighDimensionalModelsProximalAlgorithmsExt) === nothing
-    @test_throws ArgumentError nuclear_regression(ones(3, 2), ones(3, 2), 0.1; solver = :panoc)
-  end
-end
-
+using HighDimensionalModels, Test
+using LinearAlgebra, Random, Statistics
 using ProximalAlgorithms
 import ProximalBase
 
@@ -430,4 +426,3 @@ end
   end
 end
 
-include("lowrank_panoc_costs.jl")
