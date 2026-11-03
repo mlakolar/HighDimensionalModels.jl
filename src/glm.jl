@@ -341,3 +341,4 @@ function GLMLassoPath(X::AbstractMatrix{<:Real}, y::AbstractVector{<:Real},
   T, Xf, yf = _float_data(X, y)
   GLMLassoPath(Xf, yf, loss, options; kwargs...)
 end
+# CI scenario: a comment-only change to the GLM source.
