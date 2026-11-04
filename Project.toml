@@ -32,6 +32,7 @@ HiGHS = "1"
 Aqua = "0.8"
 DelimitedFiles = "1"
 LinearAlgebra = "1"
+Logging = "1"
 PrecompileTools = "1"
 ProximalBase = "0.5.4"
 ProximalAlgorithms = "0.7"
@@ -51,6 +52,7 @@ julia = "1.10"
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 ParallelTestRunner = "d3525ed8-44d0-4b2c-a655-542cee43accc"
 ProximalAlgorithms = "140ffc9f-1907-541a-a177-7475e0a401e9"
 StatsModels = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
@@ -58,4 +60,4 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["HiGHS", "DelimitedFiles", "Aqua", "ParallelTestRunner", "ProximalAlgorithms", "StatsModels", "TOML", "Test"]
+test = ["HiGHS", "DelimitedFiles", "Aqua", "Logging", "ParallelTestRunner", "ProximalAlgorithms", "StatsModels", "TOML", "Test"]
