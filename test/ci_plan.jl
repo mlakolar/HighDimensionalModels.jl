@@ -239,6 +239,46 @@ end
     end
   end
 
+  @testset "the gate" begin
+    v = CIPlan.verdict
+    jobs = CIPlan.JOBS
+    allskipped = Dict(j => "skipped" for j in jobs)
+    with(d...) = merge(allskipped, Dict(d...))
+    # Documentation only: nothing required, everything skipped.
+    @test v("success", "true", "", allskipped)[1]
+    # A focused plan: the required jobs passed, the others were skipped.
+    @test v("success", "true", "examples test", with("test" => "success", "examples" => "success"))[1]
+    # A required job that failed, was cancelled, skipped or is missing.
+    for r in ("failure", "cancelled", "skipped", "")
+      @test !v("success", "true", "examples test", with("test" => r, "examples" => "success"))[1]
+    end
+    @test !v("success", "true", "test", delete!(with("test" => "success"), "examples"))[1]
+    # A job that was not required may be skipped or pass, but not fail or be cancelled.
+    @test v("success", "true", "test", with("test" => "success", "examples" => "success"))[1]
+    @test !v("success", "true", "test", with("test" => "success", "examples" => "failure"))[1]
+    @test !v("success", "true", "test", with("test" => "success", "examples" => "cancelled"))[1]
+    # A failed, cancelled or incomplete plan fails even if nothing else ran.
+    for (result, ok) in (("failure", ""), ("cancelled", ""), ("skipped", ""), ("", ""), ("success", ""), ("success", "false"))
+      @test !v(result, ok, "", allskipped)[1]
+    end
+    # A plan naming an unknown job, and results from an unknown job.
+    @test !v("success", "true", "test deploy", with("test" => "success"))[1]
+    @test !v("success", "true", "test", with("test" => "success", "deploy" => "skipped"))[1]
+    passed, lines = v("success", "true", "test", with("test" => "failure"))
+    @test !passed && any(l -> occursin("test is required, but its result is `failure`", l), lines)
+    # Every job the workflow defines is a known job, and the gate needs all of them.
+    workflow = joinpath(ROOT, ".github", "workflows", "CI.yml")
+    if isfile(workflow)
+      text = replace(read(workflow, String), "\r\n" => "\n")   # Windows checkouts have CRLF line endings
+      needs = match(r"\n  gate:\n(?:.*\n)*?    needs: \[([^\]]*)\]", text)
+      @test needs !== nothing && Set(strip.(split(needs[1], ','))) == Set(["plan"; collect(jobs)])
+      for j in jobs
+        @test occursin("\n  $j:\n", text)
+        @test occursin("$j=\${{ needs.$j.result }}", text) || occursin("$j=\${{ needs['$j'].result }}", text)
+      end
+    end
+  end
+
   @testset "source rules must select tests" begin
     R(paths, level; families = String[], tests = String[], jobs = String[]) = Rule(paths, level, families, tests, jobs, "r")
     map(rules...) = Impact(["smoke"], ["aqua"], Dict("glm" => ["glm", "cv_glm"]), Rule[rules...])

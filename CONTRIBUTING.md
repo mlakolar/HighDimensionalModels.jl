@@ -70,9 +70,48 @@ When you add a source file, add a rule for it to `test/impact.toml`, naming the
 families or tests that call into it, directly or through other source files; the
 planner stops on a source file without such a rule, and on one whose rules only
 add CI jobs. When you add a test file, put it in a family. Selection is a
-convenience, not proof: full runs are the check (today CI runs every file), and
-a failure one finds that a selective run missed is a bug in the map, recorded
-under `[[miss]]` in `test/impact.toml`.
+convenience, not proof: the nightly full run is the check, and a failure it
+finds that a selective run missed is a bug in the map, recorded under `[[miss]]`
+in `test/impact.toml`.
+
+## Continuous integration
+
+`.github/workflows/CI.yml` starts with a plan job that runs the same planner and
+writes the plan, with its reasons, to the run's summary page.
+
+| Event | What runs |
+|---|---|
+| Pull request, push to master | the planned test files on Linux (Julia lts and 1, two workers each), and the jobs the plan names: master-dependency integration (on the same files), the Knockoffs extension, the examples |
+| Documentation only | no package test; the gate still reports |
+| Nightly (Mon-Sat) | every file on Linux with coverage, the Knockoffs extension, master-dependency integration |
+| Weekly (Sun), tag, manual run | the nightly set plus macOS, Windows and the examples |
+
+Overrides:
+
+- `CI: full` on a line of the PR's head commit message runs everything,
+  macOS and Windows included. An empty commit
+  (`git commit --allow-empty -m "Run the full suite" -m "CI: full"`) works.
+  Labels are not used, because a label starts a second run on the same commit
+  whose pending check would not hide the first run's green one.
+- `gh workflow run CI.yml --ref <branch>` runs the full set on any branch,
+  e.g. before tagging a release. Its check is named `gate (workflow_dispatch)`
+  and does not count as a pull request's check.
+- Locally, `scripts/test_affected.jl` shows and runs the plan, and
+  `scripts/test_registered.jl` with no arguments runs every file.
+
+The `gate` job passes only if the plan succeeded and every job it required
+succeeded; an unrequired job must have been skipped. A failed, cancelled or
+missing required job, or a failed plan, fails it. Re-running failed jobs
+re-runs the gate. A failing run on master, a tag or a schedule opens or
+updates the issue "CI failing on master".
+
+### Required checks
+
+The branch ruleset requires no status check today. After the workflow has run
+on a few pull requests, require exactly one check: `gate`, from the GitHub
+Actions app, on pull requests into master. The job names of the test matrix
+may change freely; only `gate` is stable. Do not require `gate (push)` or the
+other event-suffixed names.
 
 For examples or documentation, run `julia scripts/instantiate_release.jl examples`
 or `julia scripts/instantiate_release.jl docs`, respectively. These environments

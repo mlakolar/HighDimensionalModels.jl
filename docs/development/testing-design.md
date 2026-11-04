@@ -4,10 +4,9 @@ This note records how the tests run, how a change selects its tests, and how CI 
 required. CONTRIBUTING.md has the commands; this file has the reasons. It is not part of the
 documentation site.
 
-Status: sections 1-3 are implemented by PR #203 (#196, the parallel runner) and sections 4-6 by
-PR #204 (#197, the impact map and planner, used locally by `scripts/test_affected.jl`). Sections
-7-11 are design proposals for #198 (selective CI); none of it exists yet, so every pull request and
-push still runs the whole suite on the existing CI matrix. #195 tracks the whole.
+Status: sections 1-3 are implemented by PR #203 (#196, the parallel runner), sections 4-6 by
+PR #204 (#197, the impact map and planner) and sections 7-11 by PR #205 (#198, selective CI).
+#195 tracks the whole.
 
 ## 1. Execution model
 
@@ -119,9 +118,7 @@ and the deprecation child for source changes.
 - Source changed without a test change: reported in the plan summary.
 - Documentation only (`docs/**`, Markdown, `LICENSE`): no package tests; the gate still reports.
 
-## 7. GitHub Actions (proposed)
-
-*Sections 7-11 are proposals for #198, not current behaviour.*
+## 7. GitHub Actions
 
 One workflow, `CI.yml`:
 
@@ -129,10 +126,11 @@ One workflow, `CI.yml`:
 |---|---|
 | `plan` | always; computes the plan, writes the summary, exports outputs |
 | `test` (Linux, Julia lts and 1) | the plan selects any test file |
-| `test-cross` (macOS, Windows) | weekly, tags, manual full |
+| `test-cross` (macOS, Windows) | weekly, tags, manual runs, `Project.toml` and `CI.yml` changes, `CI: full` |
 | `master-integration` | the change touches the ProximalBase/ProximalSolvers interface; nightly |
 | `knockoff-extension` (lts, 1) | knockoff sources, the Knockoffs extension, full changes |
-| `examples` | the public APIs the examples use, `examples/**`; weekly |
+| `examples` | the public APIs the examples use, `examples/**`; full plans; weekly |
+| `report` | a failing run on master (push, schedule, manual) or a tag: opens or comments on "CI failing on master"; not a manual run on another branch |
 | `gate` | always (`if: always()`), named `gate` on pull requests |
 
 The test jobs run the selected files with two workers in one job per Julia version, which shares
@@ -158,29 +156,37 @@ only where `julia-actions/cache` prunes its caches. Event data reaches scripts t
 never interpolated into a shell line. Fork PRs have no secrets and need none: coverage is not
 collected on PRs.
 
-## 8. Scheduled and release validation (proposed)
+## 8. Scheduled and release validation
 
 - Nightly (Monday to Saturday): the full registered suite on Linux, Julia lts and 1, with
-  coverage on Julia 1; the Knockoffs job; master-dependency integration (full suite), which prints
-  the ProximalBase and ProximalSolvers commits it tested.
+  coverage; the Knockoffs job; master-dependency integration (full suite), which
+  records the ProximalBase and ProximalSolvers commits it tested.
 - Weekly (Sunday): the nightly jobs plus macOS and Windows and the examples.
 - Release: a tag push runs the weekly set; before tagging, run it by hand
-  (`gh workflow run CI.yml -f full=true`).
+  (`gh workflow run CI.yml --ref <branch>`).
 
 Schedules do not skip a commit that already passed: registered dependencies and dependency masters
 change between nights, so the commit alone does not identify what was tested.
 
-## 9. Coverage (proposed)
+Benchmark correctness checks stay with #138. The planner's families map onto the harness groups
+(lasso, glm, group, multitask, lowrank, quantile, structured, selection, inference), so a
+`benchmark` job could take the families of a plan as `HDM_GROUPS`; that job and its acceptance
+belong to #138.
 
-Collected only in full runs (nightly and weekly Julia 1 Linux job, and the Knockoffs job for the
-extension), so every upload comes from the same, complete suite. Selective PR runs collect none.
+## 9. Coverage
 
-## 10. Performance measurement (proposed)
+Collected only in full runs (the nightly and weekly Linux jobs on Julia lts and 1, and the Knockoffs
+job for the extension), so every upload comes from the same, complete suite. Both Julia versions
+upload, as before: lts counts some method-definition lines that Julia 1 does not, and without the
+lts upload about 50 such lines would show as missed although their bodies are covered. Selective
+PR runs collect none; a PR whose head commit says `CI: full` collects it.
+
+## 10. Performance measurement
 
 PTR prints per-file wall, compile, GC and RSS figures; the CI test step's job summary lists them.
 The comparison with the sequential runner is in the PR descriptions. No CI step asserts on time.
 
-## 11. Failure handling and audit (proposed)
+## 11. Failure handling and audit
 
 - The plan job fails (and so the gate) on an invalid inventory or map, rather than guessing.
 - The nightly and weekly full runs are the audit of the map. When a full run fails on a commit
