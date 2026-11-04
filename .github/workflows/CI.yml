@@ -98,7 +98,8 @@ jobs:
         with:
           name: supported-dependency-manifest
           path: .supported-test-env/v*/Manifest.toml
-          if-no-files-found: ignore
+          include-hidden-files: true   # the environment directory starts with a dot
+          if-no-files-found: error
   examples:
     name: Examples
     runs-on: ubuntu-latest
