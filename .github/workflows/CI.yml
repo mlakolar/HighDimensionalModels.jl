@@ -69,8 +69,10 @@ jobs:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
-  master-integration:
-    name: Master dependency integration
+  # ProximalBase and ProximalSolvers at the commits of scripts/supported_dependencies.toml.
+  # Their master branches are tested by the non-blocking UpstreamMaster.yml workflow.
+  supported-integration:
+    name: Supported dependency integration
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -82,12 +84,22 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      - run: julia scripts/instantiate.jl
-      - run: julia scripts/test_master.jl
+      - name: Check out and verify the supported ProximalBase and ProximalSolvers commits
+        run: julia scripts/test_supported.jl --setup-only
+      - name: Test with the supported dependency commits
+        run: julia scripts/test_supported.jl
         env:
           JULIA_NUM_THREADS: "2"
           JULIA_TEST_DEPWARN: "error"
           PTR_NUM_JOBS: "2"
+      - name: Keep the resolved manifest
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: supported-dependency-manifest
+          path: .supported-test-env/v*/Manifest.toml
+          include-hidden-files: true   # the environment directory starts with a dot
+          if-no-files-found: error
   examples:
     name: Examples
     runs-on: ubuntu-latest

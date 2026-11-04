@@ -111,7 +111,8 @@ ProximalSolvers; to write your own algorithm, ProximalBase.
 ## Development tests
 
 From the repository root, run `julia scripts/test_registered.jl` for the full
-suite with registered dependencies on Julia 1.10 and newer. In a separate
-checkout, `julia scripts/test_master.jl` checks integration with dependency
-master checkouts. The repository's
+suite with registered dependencies on Julia 1.10 and newer.
+`julia scripts/test_supported.jl` tests with the supported ProximalBase and
+ProximalSolvers commits. In a separate checkout, `julia scripts/test_master.jl`
+checks integration with dependency master checkouts. The repository's
 `CONTRIBUTING.md` describes the naming convention and bootstrap scripts.

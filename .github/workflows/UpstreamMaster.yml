@@ -1,0 +1,49 @@
+name: Upstream master migration
+# Tests with the ProximalBase and ProximalSolvers master branches (scripts/test_master.jl).
+# Not required and not part of CI.yml: ProximalBase master is 0.6.0-DEV, and this fails until
+# HighDimensionalModels migrates (ProximalBase#527). The required check is "Supported dependency
+# integration" in CI.yml, at the commits of scripts/supported_dependencies.toml.
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    paths:
+      - 'Project.toml'
+      - 'scripts/test_master.jl'
+      - 'scripts/master_dependencies.jl'
+      - 'scripts/instantiate.jl'
+      - 'scripts/integration.jl'
+      - '.github/workflows/UpstreamMaster.yml'
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  master-integration:
+    name: Master dependency integration (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions: # julia-actions/cache deletes the old caches it created
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - run: julia scripts/instantiate.jl
+      - run: julia scripts/test_master.jl
+        env:
+          JULIA_NUM_THREADS: "2"
+          JULIA_TEST_DEPWARN: "error"
+          PTR_NUM_JOBS: "2"

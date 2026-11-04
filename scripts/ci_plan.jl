@@ -17,9 +17,9 @@ include(joinpath(@__DIR__, "..", "test", "testsuite.jl"))
 using .TestSuite
 
 const LEVELS = ("none", "focused", "broad", "full")
-const JOBS = ("test", "test-cross", "master-integration", "knockoff-extension", "examples")
+const JOBS = ("test", "test-cross", "supported-integration", "knockoff-extension", "examples")
 # A full plan runs these; test-cross (macOS, Windows) only on request or by rule.
-const FULL_JOBS = ["test", "master-integration", "knockoff-extension", "examples"]
+const FULL_JOBS = ["test", "supported-integration", "knockoff-extension", "examples"]
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 
 struct Rule

@@ -61,7 +61,7 @@ end
     @test issubset(["glm", "glm_penalties", "cv_glm", "cv", "quantile", "statsapi", "smoke", "aqua", "deprecated"], selected(pl))
     # A GLM change does not rerun unrelated low-rank or structured tests.
     @test !any(t -> startswith(t, "lowrank") || startswith(t, "structured"), selected(pl))
-    @test issubset(["test", "examples", "master-integration"], pl.jobs)
+    @test issubset(["test", "examples", "supported-integration"], pl.jobs)
     @test !("test-cross" in pl.jobs)
   end
 
@@ -170,14 +170,20 @@ end
     ci = p(M(".github/workflows/CI.yml"))
     @test isfull(ci) && "test-cross" in ci.jobs
     @test isfull(p(M("scripts/ci_plan.jl")))
-    for f in ("docs/src/index.md", "README.md", "NEWS.md", "benchmark/run.jl", ".github/workflows/Documentation.yml")
+    for f in ("docs/src/index.md", "README.md", "NEWS.md", "benchmark/run.jl", ".github/workflows/Documentation.yml",
+              ".github/workflows/UpstreamMaster.yml")
       pl = p(M(f))
       @test pl.level == "none" && isempty(pl.tests) && isempty(pl.jobs)
     end
     mixed = p(M("README.md"), M("src/transfer.jl"))
     @test mixed.level == "focused" && "transfer" in mixed.tests
     @test p(M("examples/01_lasso.jl")).jobs == ["examples", "test"]
-    @test "master-integration" in p(M("scripts/test_master.jl")).jobs
+    # The supported dependency commits and both integration environments run the required job.
+    for f in ("scripts/test_master.jl", "scripts/test_supported.jl", "scripts/supported_dependencies.toml",
+              "scripts/integration.jl", "scripts/master_dependencies.jl")
+      pl = p(M(f))
+      @test pl.level == "focused" && pl.jobs == ["supported-integration", "test"]
+    end
   end
 
   @testset "empty and malformed input, explicit escalation" begin
@@ -253,16 +259,16 @@ end
     @test occursin("has no rule", only(source_problems(map(R(new, "none")), new)))
     @test occursin("has no rule", only(source_problems(map(), ["ext/NewExt.jl"])))
     # Rules are judged together: a job-only rule may accompany one that selects tests.
-    both = map(R(new, "focused"; families = ["glm"]), R(["src/*.jl"], "focused"; jobs = ["master-integration"]))
+    both = map(R(new, "focused"; families = ["glm"]), R(["src/*.jl"], "focused"; jobs = ["supported-integration"]))
     @test isempty(source_problems(both, new))
     pl = plan([M(new[1])], both, INVENTORY)
-    @test Set(pl.tests) == Set(["glm", "cv_glm", "smoke", "aqua"]) && "master-integration" in pl.jobs
+    @test Set(pl.tests) == Set(["glm", "cv_glm", "smoke", "aqua"]) && "supported-integration" in pl.jobs
     # Overlapping rules select the union of their tests.
     two = map(R(new, "focused"; families = ["glm"]), R(["src/new_*.jl"], "broad"; tests = ["lasso"]))
     pl = plan([M(new[1])], two, INVENTORY)
     @test pl.level == "broad" && Set(pl.tests) == Set(["glm", "cv_glm", "lasso", "smoke", "aqua"])
     # Job-only and test-less rules stay valid for paths outside src/ and ext/.
-    @test isempty(source_problems(map(R(["scripts/test_master.jl"], "focused"; jobs = ["master-integration"])), ["scripts/test_master.jl"]))
+    @test isempty(source_problems(map(R(["scripts/test_master.jl"], "focused"; jobs = ["supported-integration"])), ["scripts/test_master.jl"]))
     # The real map accepts a vacuous rule for a file that does not exist yet, and rejects the file once it does.
     good = read(joinpath(@__DIR__, "impact.toml"), String)
     mktempdir() do dir

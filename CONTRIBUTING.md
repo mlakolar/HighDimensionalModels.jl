@@ -20,7 +20,8 @@ KernelSmoothing integration is covered by the numbered examples.
 The test files run in parallel worker processes
 ([ParallelTestRunner](https://github.com/JuliaTesting/ParallelTestRunner.jl)).
 `Pkg.test()` and the scripts without arguments run every file; arguments select
-files and are passed on by `scripts/test_registered.jl` and `scripts/test_master.jl`:
+files and are passed on by `scripts/test_registered.jl`, `scripts/test_supported.jl` and
+`scripts/test_master.jl`:
 
 ```sh
 julia scripts/test_registered.jl --only=lasso,cv   # exactly these files
@@ -79,10 +80,18 @@ or `julia scripts/instantiate_release.jl docs`, respectively. These environments
 use this checkout and registered runtime dependencies, with KernelSmoothing
 fetched at a pinned commit until it is registered.
 
+For integration with the supported ProximalBase and ProximalSolvers commits,
+the required CI check, run `julia scripts/test_supported.jl`. The commits are
+listed in `scripts/supported_dependencies.toml`; they are cloned into
+`.supported-test-env/deps` (not your sibling checkouts) and verified before and
+after the tests. Change a commit in its own pull request.
+
 For integration with dependency master checkouts, use a separate checkout and
 run `julia scripts/test_master.jl`. Missing sibling checkouts are cloned from
 master; existing checkouts are never reset or silently updated. This workflow
-intentionally uses path overrides and is kept as a separate CI job.
+intentionally uses path overrides. Its CI job, in the separate "Upstream master
+migration" workflow, is not required: ProximalBase master is 0.6.0-DEV, and the
+migration is tracked in ProximalBase#527.
 
 Active manifests are generated locally. Historical benchmark lockfiles and
 recorded source identities, the evidence of their original runs, are frozen in

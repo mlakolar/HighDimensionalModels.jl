@@ -171,6 +171,7 @@ julia scripts/test_registered.jl
 ```
 
 This runs ordinary `Pkg.test()` with registered dependencies and deprecations
-as errors. For integration with dependency master checkouts, run
-`julia scripts/test_master.jl` in a separate checkout. See
+as errors. `julia scripts/test_supported.jl` tests with the supported
+ProximalBase and ProximalSolvers commits; for integration with dependency
+master checkouts, run `julia scripts/test_master.jl` in a separate checkout. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the naming policy and environment setup.
