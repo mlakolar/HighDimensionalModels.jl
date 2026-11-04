@@ -1,4 +1,6 @@
 # Run from a package's scripts/instantiate.jl, or pass an environment directory.
+# Workspace packages come from master checkouts, or, with `revisions`, from checkouts at exact
+# commits (scripts/test_supported.jl).
 using Pkg, TOML
 
 const WORKSPACE_PACKAGES = Dict(
@@ -12,9 +14,34 @@ const WORKSPACE_PACKAGES = Dict(
     "FunctionalGraphicalModels" => ("FunctionalGraphicalModels.jl", "FunctionalGraphicalModels.jl"),
 )
 
+repository_url(name) = "https://github.com/mlakolar/$(WORKSPACE_PACKAGES[name][2])"
+
+# Clone `name` at the full commit SHA `revision` into `checkout`, detached.
+function clone_revision(name, checkout, revision)
+    mkpath(dirname(checkout))
+    run(`git init --quiet $checkout`)
+    run(`git -C $checkout fetch --quiet --depth=1 $(repository_url(name)) $revision`)
+    run(`git -C $checkout checkout --quiet --detach FETCH_HEAD`)
+end
+
+# Error unless `checkout` is at exactly `revision` with no local changes.
+function verify_revision(name, checkout, revision)
+    head = readchomp(`git -C $checkout rev-parse HEAD`)
+    head == revision || error("$name: $checkout is at $head, not the revision $revision; " *
+                              "remove the checkout to clone the revision again")
+    changes = readchomp(`git -C $checkout status --porcelain --untracked-files=all`)
+    isempty(changes) || error("$name: $checkout has local changes:\n$changes")
+    return head
+end
+
+# Without `revisions`, workspace packages come from master checkouts in `workspace` (cloned when
+# missing). With `revisions` (package name => full commit SHA), every workspace dependency must
+# have a revision, and its checkout in `workspace` is cloned at that commit when missing and
+# verified to be at it, clean, otherwise; existing checkouts are never reset.
 function instantiate_master(environment::AbstractString;
                             workspace::Union{Nothing,AbstractString}=nothing,
-                            owner::AbstractString=environment)
+                            owner::AbstractString=environment,
+                            revisions::Union{Nothing,AbstractDict}=nothing)
     environment = realpath(environment)
     owner = realpath(owner)
     workspace = workspace === nothing ? dirname(owner) : realpath(workspace)
@@ -29,15 +56,23 @@ function instantiate_master(environment::AbstractString;
             haskey(WORKSPACE_PACKAGES, name) || continue
             name in visiting && continue
             push!(visiting, name)
-            folder, repository = WORKSPACE_PACKAGES[name]
+            folder, _ = WORKSPACE_PACKAGES[name]
             is_owner = name == owner_name
             checkout = is_owner ? owner : joinpath(workspace, folder)
-            if !isdir(checkout)
-                url = "https://github.com/mlakolar/$repository"
-                run(`git clone --branch master --single-branch $url $checkout`)
+            if is_owner
+                # The package itself: this checkout, as it is.
+            elseif revisions !== nothing
+                haskey(revisions, name) || error("$name has no pinned revision")
+                isdir(checkout) || clone_revision(name, checkout, revisions[name])
+                verify_revision(name, checkout, revisions[name])
+            else
+                if !isdir(checkout)
+                    url = repository_url(name)
+                    run(`git clone --branch master --single-branch $url $checkout`)
+                end
+                branch = strip(read(`git -C $checkout branch --show-current`, String))
+                branch == "master" || error("$name must use its master checkout: $checkout is on $branch")
             end
-            branch = strip(read(`git -C $checkout branch --show-current`, String))
-            (is_owner || branch == "master") || error("$name must use its master checkout: $checkout is on $branch")
             dependency = TOML.parsefile(joinpath(checkout, "Project.toml"))
             dependency["name"] == name || error("wrong package name at $checkout")
             dependency["uuid"] == deps[name] || error("wrong UUID for $name at $checkout")

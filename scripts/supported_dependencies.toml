@@ -1,0 +1,9 @@
+# The ProximalBase and ProximalSolvers commits that the required "Supported dependency
+# integration" check tests against (scripts/test_supported.jl): full commit SHAs. Change a
+# revision in its own pull request. ProximalBase master is 0.6.0-DEV (ProximalBase#527); the
+# non-blocking "Upstream master migration" workflow tests both master branches.
+[revisions]
+# 0.5.4, the last commit before master became 0.6.0-DEV
+ProximalBase = "ecb00cc5dcf3998943576784b182b49a7a4e1784"
+# 0.3.2 (#174), requires ProximalBase 0.5.3
+ProximalSolvers = "ba11f5273c526c1b727fa2ae11b5e8609c2fc18b"

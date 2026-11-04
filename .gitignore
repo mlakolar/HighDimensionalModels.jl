@@ -12,8 +12,9 @@
 /docs/Manifest*.toml
 /docs/src/examples/
 
-# Generated master dependency test environments
+# Generated dependency test environments (and the supported dependency checkouts)
 .master-test-env/
+.supported-test-env/
 
 # Local Julia-minor environments are regenerated from master checkouts
 /Manifest-v*.toml

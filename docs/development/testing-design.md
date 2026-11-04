@@ -19,7 +19,7 @@ each file's time, compile share, GC and memory, and a summary of every testset.
 
 - `Pkg.test()` with no arguments runs every test file. Arguments select files: `--only=a,b` (exact
   names), positional prefixes (`lowrank` runs every `lowrank*` file), `--list`, `--jobs=N`,
-  `--verbose`. `scripts/test_registered.jl` and `scripts/test_master.jl` pass their arguments on.
+  `--verbose`. `scripts/test_registered.jl`, `scripts/test_supported.jl` and `scripts/test_master.jl` pass their arguments on.
 - Workers inherit the parent's `--check-bounds`, `--depwarn` and `--code-coverage` flags
   (`Base.julia_cmd()`), so CI's `--depwarn=error` and coverage apply to every file.
 - Threads: each worker has `HDM_TEST_THREADS` Julia threads (default 2, what CI used before) and
@@ -130,13 +130,19 @@ One workflow, `CI.yml`:
 | `plan` | always; computes the plan, writes the summary, exports outputs |
 | `test` (Linux, Julia lts and 1) | the plan selects any test file |
 | `test-cross` (macOS, Windows) | weekly, tags, manual full |
-| `master-integration` | the change touches the ProximalBase/ProximalSolvers interface; nightly |
+| `supported-integration` | the change touches the ProximalBase/ProximalSolvers interface or the supported commits; nightly |
 | `knockoff-extension` (lts, 1) | knockoff sources, the Knockoffs extension, full changes |
 | `examples` | the public APIs the examples use, `examples/**`; weekly |
 | `gate` | always (`if: always()`), named `gate` on pull requests |
 
 The test jobs run the selected files with two workers in one job per Julia version, which shares
 the precompilation and startup across files; a job per file would repeat them.
+
+`supported-integration` tests with ProximalBase and ProximalSolvers at the commits of
+`scripts/supported_dependencies.toml`, verified before and after the tests. The master branches
+are tested by a separate workflow, `UpstreamMaster.yml` (daily, on pushes to master, and on pull
+requests that change the dependency setup). It is outside `gate` and not required: ProximalBase
+master is 0.6.0-DEV until the migration (ProximalBase#527).
 
 **Gate.** `gate` needs every job and passes only if the plan succeeded and wrote a complete plan,
 every planned job succeeded, and every unplanned job was skipped (or succeeded). A failed,

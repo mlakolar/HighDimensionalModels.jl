@@ -9,7 +9,8 @@
 #
 # Levels: none (no package tests) < focused < broad < full (every test file). A rule selects its
 # families and tests; full selects everything. `jobs` adds CI jobs beyond the Linux test jobs:
-# master-integration (dependency master checkouts), knockoff-extension, examples, test-cross
+# supported-integration (ProximalBase and ProximalSolvers at the commits of
+# scripts/supported_dependencies.toml), knockoff-extension, examples, test-cross
 # (macOS and Windows). A full plan runs every job but test-cross.
 #
 # The map was built by reading which source files call which internal helpers, not from
@@ -69,7 +70,7 @@ paths = ["src/glm.jl"]
 level = "broad"
 families = ["glm", "cv", "quantile", "interfaces"]
 tests = ["statsapi"]
-jobs = ["examples", "master-integration"]
+jobs = ["examples", "supported-integration"]
 reason = "GLM estimators; CVGLMLassoPath, the GLM StatsAPI methods and the smoothed quantile path (GLMLassoPath) call them; proximal Newton comes from ProximalSolvers."
 
 [[rules]]
@@ -90,7 +91,7 @@ paths = ["src/coordinate_descent.jl"]
 level = "broad"
 families = ["lasso_api", "group"]
 tests = ["slope_sparse"]
-jobs = ["examples", "master-integration"]
+jobs = ["examples", "supported-integration"]
 reason = "The public coordinate-descent interface over ProximalSolvers, used by the group, SLOPE and custom-loss examples."
 
 # ---- Focused: one family and its direct consumers ----------------------------------------
@@ -139,7 +140,7 @@ reason = "Low-rank regression; sparse SVD, the sparse and plus-sparse fits and t
 paths = ["src/lowrank_sparse.jl"]
 level = "focused"
 families = ["lowrank"]
-jobs = ["examples", "master-integration"]
+jobs = ["examples", "supported-integration"]
 reason = "Sparse nuclear regression (ProximalBase prox methods for its losses); the plus-sparse fit and PenaltyGrid call it."
 
 [[rules]]
@@ -301,10 +302,11 @@ jobs = ["test-cross"]
 reason = "The CI workflow: every job runs, so each changed path of it is exercised."
 
 [[rules]]
-paths = ["scripts/test_master.jl", "scripts/master_dependencies.jl", "scripts/instantiate.jl"]
+paths = ["scripts/test_master.jl", "scripts/master_dependencies.jl", "scripts/instantiate.jl",
+         "scripts/integration.jl", "scripts/test_supported.jl", "scripts/supported_dependencies.toml"]
 level = "focused"
-jobs = ["master-integration"]
-reason = "The master-dependency environment."
+jobs = ["supported-integration"]
+reason = "The dependency integration environments and the supported dependency commits."
 
 [[rules]]
 paths = ["scripts/instantiate_release.jl", "examples/**"]
@@ -319,7 +321,8 @@ reason = "The naming check (run by the plan job) and the local affected-tests sc
 
 [[rules]]
 paths = ["docs/**", "**.md", "LICENSE", ".gitignore", ".github/workflows/Documentation.yml",
-         ".github/workflows/CompatHelper.yml", ".github/workflows/TagBot.yml"]
+         ".github/workflows/CompatHelper.yml", ".github/workflows/TagBot.yml",
+         ".github/workflows/UpstreamMaster.yml"]
 level = "none"
 reason = "Documentation and other workflows: no package test."
 
