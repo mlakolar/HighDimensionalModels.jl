@@ -19,10 +19,13 @@ optimality certificate; see [`lasso`](@ref).
 
 `result` is the result of ProximalSolvers on the problem it was given, `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`,
 where `Z` and `ỹ` are the centred and scaled data of [`lasso`](@ref) (`X` and `y` themselves with
-both keywords false). With `standardize_x = true`, `result.minimizer` is `θ`, with `θⱼ = sⱼ βⱼ`,
-and `result.minimum` is `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the objective of `lasso` at
-`(β₀, β)` (the one with the weights `sⱼ`, not the plain lasso objective of `β`) in exact
-arithmetic. With `intercept = true` and `standardize_x = false`, `θ = β`.
+both keywords false). With `standardize_x = true`, `result.minimizer` is `θ`; in exact arithmetic
+`θⱼ = sⱼ βⱼ` for the mathematical back-map `βⱼ = θⱼ/sⱼ`, but the stored slopes are the rounded
+divisions `θⱼ/sⱼ` in `T` with `0` for a column of scale `0` (see the limit of the back-map in
+[`lasso`](@ref)), so `θⱼ = sⱼ βⱼ` need not hold for them. `result.minimum` is
+`‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the objective of `lasso` at the mathematical `(β₀, β)` (the
+one with the weights `sⱼ`, not the plain lasso objective of `β`) in exact arithmetic. With
+`intercept = true` and `standardize_x = false`, `θ = β`.
 
 `result.maxchange` and `result.tolerance` are the solver's. With `relative = true` (the default
 of `CDSolver`) and `ỹ ≠ 0`, `maxchange` is the largest change of a coefficient `|Δθⱼ|‖Zⱼ‖/√n` in

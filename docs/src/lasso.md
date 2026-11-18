@@ -26,7 +26,8 @@ where `β₀ = 0` unless `intercept = true` (the intercept is not penalized) and
 centred column with an intercept, the column itself without. With the
 weights, `β = 0` (with `β₀ = ȳ`, or `0` without an intercept) is a minimizer in exact arithmetic
 if and only if `λ ≥ λmax = maxⱼ |x̃ⱼ'ỹ| / (n sⱼ)` over the columns with `sⱼ > 0`, where `x̃ⱼ` and
-`ỹ` are the centred (or raw, without an intercept) column and response.
+`ỹ` are the centred (or raw, without an intercept) column and response; `λmax = 0` when no column has
+a positive scale (the fit is then zero for every `λ ≥ 0`).
 
 The call solves an ordinary unweighted lasso on transformed data. Let `ȳ` be the mean of `y`
 (`0` without an intercept), `Z` the matrix with the columns `(xⱼ - x̄ⱼ)/sⱼ` (`xⱼ - x̄ⱼ` without
@@ -40,7 +41,8 @@ directly.
   same way). The solver keeps a column of zeros at zero, so the coefficient of such a column is
   `0`; with `standardize_x = true` its scale is `0` and no division takes place. A zero
   column also gets `0` without an intercept. Without an intercept, a constant column that is not
-  zero is an ordinary column: with `standardize_x = true`, `fill(0.1, n)` has the scale `0.1`.
+  zero is an ordinary column: with `standardize_x = true`, `fill(0.1, n)` has the scale `0.1` up to rounding
+  (the computed root mean square of the stored entries).
 - **Zero scale and the weight.** No tolerance decides a zero scale, only exact zeros after
   centring. With `standardize_x = true`, the scale `sⱼ` of any other column is the root mean
   square of its centred entries (of the column itself without an intercept), and the penalty
@@ -135,7 +137,9 @@ a run that meets the test within the cap, even after one pass, returns `converge
 
 With `intercept = true` or `standardize_x = true`, `fit.result` is the result of ProximalSolvers
 on the transformed problem `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`. With `standardize_x = true`,
-`fit.result.minimizer` is `θ`, with `θⱼ = sⱼ βⱼ`, and not `coefficients` (with `intercept = true`
+`fit.result.minimizer` is `θ`, and not `coefficients` (in exact arithmetic `θⱼ = sⱼ βⱼ` for the
+mathematical back-map `βⱼ = θⱼ/sⱼ`; the stored slopes are the rounded divisions, with `0` for a column
+of scale `0`, and `θⱼ = sⱼ βⱼ` need not hold for them, see the limit of the back-map below) (with `intercept = true`
 alone, `θ = β` and the two are the same vector); `fit.result.minimum` is
 `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the weighted objective above at `(β₀, β)` in exact
 arithmetic, not the plain lasso objective of `β`.

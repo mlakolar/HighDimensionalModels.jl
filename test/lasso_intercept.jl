@@ -59,8 +59,8 @@ end
 # ---------------------------------------------------------------------------------
 
 # A column whose entries are all equal has that value as its mean: the rule of `lasso` for constant
-# columns, which keeps them at exact zeros after centring. Other means are the means of the
-# stored entries rounded to 256 bits.
+# columns, which keeps them at exact zeros after centring. Other means are computed in 256-bit
+# arithmetic (a sum and a division), not necessarily correctly rounded.
 bigmean(v) = all(==(first(v)), v) ? first(v) : sum(v) / length(v)
 
 # Xt, yt: the centred data (the data themselves without an intercept); s: the root mean squares of
@@ -164,7 +164,9 @@ function intercept_bound(X::Matrix{T}, y::Vector{T}, ref, Δβ, β) where T
 end
 
 # ‖θ₂ - scale θ₁‖∞ against the sum of the bounds of the two fits to the same problem (up to the
-# scaling of the data), whose supports contain A: each is within coef_bound of the exact solution
+# scaling of the data). The supports of the two fits are contained in A and the exact solution of
+# each problem is supported on A (the premise of coef_bound, assumed here for the support A of the
+# first fit), so that each fit is within coef_bound of its exact solution
 function same_theta(f1, X1, y1, ref1, f2, X2, y2, ref2, A; scale = 1.0)
   b1 = coef_bound(ref1.Zf, A, maximum(kappa(f1, X1, y1, ref1).κθ))
   b2 = coef_bound(ref2.Zf, A, maximum(kappa(f2, X2, y2, ref2).κθ))
@@ -490,7 +492,7 @@ setprecision(BigFloat, 256) do
       @test all(iszero, d.Z[:, 3:5])
       st && @test d.s[3:5] == zeros(T, 3)
     end
-    # without an intercept a constant column is an ordinary column, with scale 0.1 for fill(0.1, n):
+    # without an intercept a constant column is an ordinary column, with scale 0.1 up to rounding for fill(0.1, n):
     # it absorbs the intercept of the response
     for st in (false, true)
       Xc = [X[:, 1:2] fill(T(0.1), n) X[:, 3:4]]
