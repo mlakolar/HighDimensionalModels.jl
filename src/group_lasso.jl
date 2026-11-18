@@ -244,7 +244,10 @@ matrix that is not orthogonal, can change the estimate.
 **`standardize = :orthonormal`.** The penalty is on the contribution of each group to the fitted
 values, `‖X̃_G β_G‖₂/√n`, so it depends on the group through its column span. For an invertible `M` with as
 many columns, `X̃_G M` has the same span, so in exact arithmetic the minimum and the fitted values do not change
-under `X̃_G → X̃_G M` (the coefficients of the group become `M⁻¹β_G`). In floating point the fit uses the span of
+under `X̃_G → X̃_G M`, and `M⁻¹β_G` is a corresponding solution for the group. When the rule retains all the
+columns of the group its coefficients are determined, and the returned ones are `M⁻¹β_G`, up to rounding and the
+solver's tolerance; when it drops columns the coefficients are not determined by the fit, and the pivoted QR can
+return another representative with the same contribution. In floating point the fit uses the span of
 the `r` columns that the rank rule below retains, and the fitted values are the same, up to rounding, when the
 retained spans of `X̃_G` and `X̃_G M` are the same subspace (and the solver has stopped at its tolerance). This holds when the rule retains all the columns of
 the group before and after the transformation (with `M` well conditioned), and when the dropped directions are

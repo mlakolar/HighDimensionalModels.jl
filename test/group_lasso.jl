@@ -372,13 +372,29 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       back[1:3] = M * back[1:3]
       @test norm(back - base.coefficients) ≤ tolfit(T, κ * cond(M), 3, ynorm) / smin_centred(X, 1:8)
     end
+    @testset "a group with a redundant column: the same fitted values, another representative" begin
+      # X = [a 2a] has rank 1. M⁻¹β is a corresponding solution, but the pivoted QR can return another one with the
+      # same contribution, so only the fitted values and the rank are asserted
+      a = T[1, -1, 1, -1, 2, -2]
+      Xd = hcat(a, 2a)
+      Md = Diagonal(T[3, 1])
+      for ic in (false, true)
+        f = group_lasso(Xd, a, T(0.1), [1:2], cyc(T; tol = tight(T)); intercept = ic)
+        fr = group_lasso(Xd * Md, a, T(0.1), [1:2], cyc(T; tol = tight(T)); intercept = ic)
+        @test computed_rank(Xd, [1, 2]; intercept = ic) == computed_rank(Xd * Md, [1, 2]; intercept = ic) == 1
+        @test norm(retained_projector(Xd, [1, 2]; intercept = ic) - retained_projector(Xd * Md, [1, 2]; intercept = ic)) ≤ 16 * 3 * eps(T)
+        @test count(!iszero, f.coefficients) == 1 && count(!iszero, fr.coefficients) == 1
+        @test norm(fitted(a, f) - fitted(a, fr)) ≤ tolfit(T, 1.0, 1, centred_norm(a); stol = tight(T))
+      end
+    end
     @testset "equal computed ranks do not suffice" begin
       # Three centred orthogonal columns (two nonzero entries ±1/√2 each, n = 100) scaled to the norms 1, 1.2τ
       # and 0.8τ, with τ = rank_tolerance(T, n, 3, 1), so that |R₁₁| = 1: the rule retains the first two columns.
       # Scaling the columns by 1, 1/2 and 2 (condition number 4) gives the norms 1, 0.6τ and 1.6τ: it retains the
       # first and third. Both have rank 2, but the retained spans differ, and with y the second column the fitted
-      # values at λ = 0 are y and 0. The scales are stated through `rank_tolerance`, so the case holds for any
-      # value of its constant.
+      # values at λ = 0 are y and 0. The scales are stated through `rank_tolerance`, so the case does not depend on
+      # the value of its constant, provided that τ is positive and representable in T with the scaled columns and
+      # 1.6τ < 1, so that the first column leads and the order of the diagonal entries is as constructed.
       n = 100
       U = zeros(T, n, 3)
       for k in 1:3
@@ -653,15 +669,39 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       # exhausting maxpasses is not nonconvergence: the change test is checked after the last permitted pass
       one_pass = @test_logs group_lasso(ones(T, 4, 1), zeros(T, 4), T(0.1), [1:1], cyc(T; maxpasses = 1))
       @test one_pass.result.passes == 1 && one_pass.result.converged
-      # the block step of ProximalSolvers is not the minimizer of the block problem: for a one-column group of ones
-      # (X̃ = X, w = 1, the minimizer of (1 - β)²/2 + 0.25 |β| is 0.75) with n = 10⁶ in Float32 one pass is far
-      # from it, and the solver needs several passes to meet its change test
+      # The block step of ProximalSolvers is not the minimizer of the block problem. For a one-column group of ones
+      # (X̃ = X, w = 1; the minimizer of (1 - β)²/2 + 0.25 |β| is 0.75) with n = 10⁶ in Float32, one pass is far
+      # from it and the solver needs more passes to meet its change test:
+      #   * the margin of the curvature bound is a factor 1 + δ with δ of the order of 2 n eps(T) = 0.24, so a pass
+      #     divides the error by about 1 + 1/δ ≈ 5 (pass 1 leaves 0.144, pass 2 leaves 0.028, in the runs below), and
+      #     a change below 1e-6 after the first 5 passes would need a factor of at most 0.035 per pass: `passes > 5`;
+      #   * the accuracy that the converged coefficient can reach is limited by the rounding of the correlation
+      #     x'r, a sum of n products in Float32, whose error is at most γₙ Σ|xᵢrᵢ| for any order of summation
+      #     (γₙ = n u/(1 - n u), u = eps(T)/2, so γₙ = 0.063), and Σ|xᵢrᵢ|/n = |1 - β| ≤ 0.3 near β = 0.75. The computed
+      #     stationarity condition is then off by at most γₙ 0.3 = 0.019 in the units of β, plus the stopping
+      #     tolerance and the rounding of the cached residual, which are below 1e-4. The bound used is twice the first
+      #     term plus the stopping tolerance, `bound` below (0.038). The error was 1.4e-5 to 2.9e-5 with vectorized
+      #     sums and 1.2e-4 with sequential sums (the sums are sequential under code coverage, as in CI): the
+      #     converged accuracy depends on the order of the sums, and the bound does not.
+      # The residual of the optimality condition is computed independently in BigFloat from the stored data.
       if T === Float32
-        x1, y1 = ones(T, 10^6, 1), ones(T, 10^6)
+        n1 = 10^6
+        x1, y1 = ones(T, n1, 1), ones(T, n1)
+        u = Float64(eps(T)) / 2
+        γ = n1 * u / (1 - n1 * u)
+        bound = 2γ * 0.3 + 2 * tolof(T)
+        kkt1(fit) = setprecision(BigFloat, 128) do
+          b = BigFloat(fit.coefficients[1])
+          g = sum(BigFloat(x1[i]) * (BigFloat(x1[i]) * b - BigFloat(y1[i])) for i in 1:n1) / n1
+          Float64(abs(g + BigFloat(0.25) * sign(b)))
+        end
         first_pass = @test_logs (:warn,) match_mode = :any group_lasso(x1, y1, T(0.25), [1:1], cyc(T; maxpasses = 1); intercept = false)
-        @test abs(first_pass.coefficients[1] - 0.75) > 0.05
+        @test kkt1(first_pass) > bound                          # one pass is not within the attainable accuracy
         full = group_lasso(x1, y1, T(0.25), [1:1], cyc(T); intercept = false)
-        @test full.result.converged && full.result.passes > 5 && abs(full.coefficients[1] - 0.75) < 1e-4
+        @test full.result.converged
+        @test full.result.passes > 5
+        @test kkt1(full) ≤ bound
+        @test abs(full.coefficients[1] - 0.75) ≤ bound
       end
     end
     @testset "the stored coefficients carry the rounding of the map back" begin

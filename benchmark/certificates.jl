@@ -407,7 +407,7 @@ end
 #
 # Domain. The routine is for λ > 0 and positive weights, and returns `uncertifiable` for λ = 0 or a weight of
 # zero. That is a limit of the routine, not a statement that no dual point exists there (t = 0 gives u = 0 and
-# D = 0, a feasible point with a valid but loose gap, and a positive t can be feasible too). A KKT residual is
+# D = 0, a feasible point with a valid, possibly loose gap, and a positive t can be feasible too). A KKT residual is
 # not reported in its place, since it is not a duality gap.
 
 # the exact rational numbers of the certificate

@@ -36,7 +36,11 @@ the fitted values, `‖X̃_G β_G‖/√n`, and not on the norm of its coefficie
 its column span. If the columns `X̃_G` are replaced by `X̃_G M` for an invertible matrix `M` with as many
 columns (a rescaling of a column, or a recombination of the columns of the group), the span is the same, and
 `β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty: in exact arithmetic the minimum and the
-fitted values do not change.
+fitted values do not change, and `M⁻¹β_G` is a corresponding solution. When the rank rule retains all the columns of
+the group its coefficients are determined, and the returned ones are `M⁻¹β_G` up to rounding and the solver's
+tolerance; when it drops columns, the coefficients are not determined by the fit, and the pivoted QR can return
+another representative with the same contribution (for `X = [a 2a]` and `M = Diagonal([3, 1])`, the fits have the same
+fitted values and different nonzero coefficients).
 
 In floating point the fit uses the span of the `r` columns that the rank rule (below) retains, and the fitted
 values are the same, up to rounding and the stopping tolerance of the solver, when the retained spans of `X̃_G` and `X̃_G M` are the same subspace. That
@@ -57,12 +61,13 @@ intercept) are factored by a pivoted QR in the element type `T`, `X̃_G[:, P] = 
 rank (below). The matrix `Z_G = √n Q[:, 1:r]` has `Z_G'Z_G/n = I` up to rounding, so with
 `θ_G = R̃β_G[P[1:r]]` and `R̃ = R[1:r, 1:r]/√n` the penalty is `λ wₖ‖θ_G‖`, and the objective is the group lasso
 on `Z` with the response `ỹ` (`y` centred with an intercept):
-`‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖`. The columns of a block of `Z` are orthonormal, so the block problem has the
+`‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖`. The columns of a block of `Z` are orthogonal with norm `√n` (`Z_G'Z_G/n = I`), so the block problem has the
 same curvature in all directions. ProximalSolvers' block step uses a bound on the curvature of the block, and
 the bound exceeds the curvature by a margin that depends on `n` and `eps(T)`, so a pass moves a block toward the
 minimizer of its problem and need not solve it, and the solver iterates until its change test is met or `maxpasses`
 is exhausted. For a
-one-column group of ones with `n = 10⁶` in `Float32`, `λ = 0.25` and no intercept, whose minimizer is `0.75`:
+one-column group of ones with `n = 10⁶` in `Float32`, `λ = 0.25` and no intercept, whose minimizer is `0.75`
+(the curvature bound of a one-column group contains the factor `1 + 2n·eps(T)`, about `1.24` here):
 
 ```@example group
 using HighDimensionalModels
@@ -73,6 +78,18 @@ one_pass = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
 end
 converged = group_lasso(x1, y1, 0.25f0, [1:1], CDSolver(order = :cyclic, tol = 1e-6); intercept = false)
 (one_pass = one_pass.coefficients[1], converged = converged.coefficients[1], passes = converged.result.passes)
+```
+
+The accuracy of the converged coefficient is limited by the rounding of the `Float32` sums of `10⁶` terms that the
+solver forms. For any order of summation the relative error of such a sum is at most `γₙ = n u/(1 - n u)` with
+`u = eps(Float32)/2`, so the computed stationarity condition is off by at most `γₙ|1 - β|`, about `0.019` near
+`β = 0.75`, and the bound printed below is twice that. The error that occurs depends on the order of the sums: it
+was about `1.4e-5` in the build of this page and about `1.2e-4` when the sums were sequential (a run with code coverage).
+
+```@example group
+u = eps(Float32) / 2
+γ = n1 * u / (1 - n1 * u)
+(error = abs(converged.coefficients[1] - 0.75f0), rounding_bound = 2γ * 0.3)
 ```
 
 The coefficients are mapped back by `β_G[P[1:r]] = R̃ \ θ_G`, with `β = 0` on the columns `P[r+1:end]` of the
