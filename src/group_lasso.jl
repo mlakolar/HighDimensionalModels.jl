@@ -244,10 +244,13 @@ matrix that is not orthogonal, can change the estimate.
 **`standardize = :orthonormal`.** The penalty is on the contribution of each group to the fitted
 values, `‖X̃_G β_G‖₂/√n`, so it depends on the group through its column span. For an invertible `M` with as
 many columns, `X̃_G M` has the same span, so in exact arithmetic the minimum and the fitted values do not change
-under `X̃_G → X̃_G M`, and `M⁻¹β_G` is a corresponding solution for the group. When the rule retains all the
-columns of the group its coefficients are determined, and the returned ones are `M⁻¹β_G`, up to rounding and the
-solver's tolerance; when it drops columns the coefficients are not determined by the fit, and the pivoted QR can
-return another representative with the same contribution. In floating point the fit uses the span of
+under `X̃_G → X̃_G M`: if `β_G` is a solution for `X̃_G`, then `M⁻¹β_G` is a solution for `X̃_G M`. When the columns
+of the group are linearly independent and the rank rule retains all of them for both `X̃_G` and `X̃_G M`, the
+solution is unique, and the returned coefficients are `M⁻¹β_G` up to rounding and the solver's tolerance. When a column is an exact
+combination of the others (a group that is rank deficient) the solution is not unique, and the pivoted QR can
+return another solution with the same contribution. When the rule drops a direction of a group whose columns are
+linearly independent, the fit truncates that direction: the coefficients of the dropped columns are `0` and the
+contribution lies in the span of the retained columns. In floating point the fit uses the span of
 the `r` columns that the rank rule below retains, and the fitted values are the same, up to rounding, when the
 retained spans of `X̃_G` and `X̃_G M` are the same subspace (and the solver has stopped at its tolerance). This holds when the rule retains all the columns of
 the group before and after the transformation (with `M` well conditioned), and when the dropped directions are
@@ -266,8 +269,8 @@ test is met or `maxpasses` is exhausted (see the page of the group lasso for an 
 `0` on the columns `P[r+1:end]`, which the decision treats as combinations of the others. A group of
 rank `0` (zero columns, or constant columns with an intercept) stays in the fit as one column of zeros,
 so that the groups of the fit are the groups given; its coefficients are `0`. The solution is then
-computed on the data `Z` and `ỹ` (`y` centred with an intercept), for a number of columns of `Z` that
-is the sum of the ranks (at least one per group).
+computed on the data `Z` and `ỹ` (`y` centred with an intercept); `Z` has, for each group, as many columns as its
+rank, or one column for a group of rank `0`.
 
 **Preprocessing.** With `intercept = true` the columns and the response are centred as in
 [`lasso`](@ref): a column (or `y`) whose entries are all equal has that value as its mean, so that

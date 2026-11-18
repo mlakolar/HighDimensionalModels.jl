@@ -35,12 +35,16 @@ With `standardize = :orthonormal` (the default) the penalty is on the contributi
 the fitted values, `‖X̃_G β_G‖/√n`, and not on the norm of its coefficients, so it depends on a group through
 its column span. If the columns `X̃_G` are replaced by `X̃_G M` for an invertible matrix `M` with as many
 columns (a rescaling of a column, or a recombination of the columns of the group), the span is the same, and
-`β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty: in exact arithmetic the minimum and the
-fitted values do not change, and `M⁻¹β_G` is a corresponding solution. When the rank rule retains all the columns of
-the group its coefficients are determined, and the returned ones are `M⁻¹β_G` up to rounding and the solver's
-tolerance; when it drops columns, the coefficients are not determined by the fit, and the pivoted QR can return
-another representative with the same contribution (for `X = [a 2a]` and `M = Diagonal([3, 1])`, the fits have the same
-fitted values and different nonzero coefficients).
+`β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty. So in exact arithmetic the minimum and the
+fitted values do not change, and if `β_G` is a solution for `X̃_G`, then `M⁻¹β_G` is a solution for `X̃_G M`. When the
+columns of the group are linearly independent and the rank rule retains all of them for both `X̃_G` and `X̃_G M`, the
+solution is unique, and the returned coefficients are `M⁻¹β_G` up to rounding and the solver's tolerance. When a
+column is an exact combination of the others (a rank-deficient group) the solution is not unique, and the pivoted QR
+can return another solution with the same contribution: for `a = [1, -1, 1, -1]`, `X = [a 2a]`, `y = a`, `λ = 0.1` and
+`M = Diagonal([3, 1])`, the coefficients are `[0, 0.4293]` for `X` and `[0.2862, 0]` for `X M`, with equal fitted
+values. When the rule drops a direction of a group whose columns are linearly independent,
+the fit truncates that direction: the coefficients of the dropped columns are `0` and the contribution lies in the
+span of the retained columns.
 
 In floating point the fit uses the span of the `r` columns that the rank rule (below) retains, and the fitted
 values are the same, up to rounding and the stopping tolerance of the solver, when the retained spans of `X̃_G` and `X̃_G M` are the same subspace. That
@@ -77,20 +81,15 @@ one_pass = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
     group_lasso(x1, y1, 0.25f0, [1:1], CDSolver(order = :cyclic, tol = 1e-6, maxpasses = 1); intercept = false)
 end
 converged = group_lasso(x1, y1, 0.25f0, [1:1], CDSolver(order = :cyclic, tol = 1e-6); intercept = false)
-(one_pass = one_pass.coefficients[1], converged = converged.coefficients[1], passes = converged.result.passes)
+(one_pass = one_pass.coefficients[1], converged = converged.coefficients[1], passes = converged.result.passes,
+ error = abs(converged.coefficients[1] - 0.75f0))
 ```
 
-The accuracy of the converged coefficient is limited by the rounding of the `Float32` sums of `10⁶` terms that the
-solver forms. For any order of summation the relative error of such a sum is at most `γₙ = n u/(1 - n u)` with
-`u = eps(Float32)/2`, so the computed stationarity condition is off by at most `γₙ|1 - β|`, about `0.019` near
-`β = 0.75`, and the bound printed below is twice that. The error that occurs depends on the order of the sums: it
-was about `1.4e-5` in the build of this page and about `1.2e-4` when the sums were sequential (a run with code coverage).
-
-```@example group
-u = eps(Float32) / 2
-γ = n1 * u / (1 - n1 * u)
-(error = abs(converged.coefficients[1] - 0.75f0), rounding_bound = 2γ * 0.3)
-```
+In this example the accuracy of the converged coefficient depends on the order of the `Float32` sums of `10⁶` terms
+that the solver forms. The error was about `1.4e-5` in the build of this page and `1.4e-5` to `2.9e-5` in the other
+runs without code coverage that were measured (Julia 1.10 and 1.13, with and without bounds checking), and about `1.2e-4`
+in runs with code coverage, which makes the sums sequential; the converged runs took 22 to 24 passes without code
+coverage, 45 in one case, and 85 with code coverage. These are observations, not a bound.
 
 The coefficients are mapped back by `β_G[P[1:r]] = R̃ \ θ_G`, with `β = 0` on the columns `P[r+1:end]` of the
 group, and `β₀ = ȳ - x̄ᵀβ`. With `standardize = :none` the solver sees the (centred) columns as given and
@@ -125,10 +124,10 @@ triangular factor of its pivoted QR above the tolerance
 \tau_G = c\,\sqrt{\max(n, m)}\;\texttt{eps}(T)\,|R_{11}|,
 ```
 
-where `|R₁₁|` is the largest column norm (the first diagonal entry of a pivoted QR) and `c` is the constant
+where `|R₁₁|` is the largest column norm up to rounding (the first diagonal entry of a pivoted QR) and `c` is the constant
 `HighDimensionalModels.RANK_TOLERANCE_C`, a provisional `10`. The tolerance is one function of the
 package (`rank_tolerance`). A group in which a column is a combination of the others to the rounding of the data
-has computed rank below `m`: the columns `P[r+1:end]` get the coefficient `0`, and the others carry the
+has computed rank below `m` when the diagonal entry of that direction is at most the tolerance: the columns `P[r+1:end]` get the coefficient `0`, and the others carry the
 fit of the group. Pivoted QR does not decide which column of a redundant set is dropped, so a dependent column
 added to a group need not be the one with the zero coefficient; when the dependence holds to rounding, the fitted
 values and the contribution `X̃_G β_G` of the group do not depend on that choice up to rounding, and the number of

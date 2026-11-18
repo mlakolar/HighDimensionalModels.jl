@@ -671,18 +671,15 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       @test one_pass.result.passes == 1 && one_pass.result.converged
       # The block step of ProximalSolvers is not the minimizer of the block problem. For a one-column group of ones
       # (X̃ = X, w = 1; the minimizer of (1 - β)²/2 + 0.25 |β| is 0.75) with n = 10⁶ in Float32, one pass is far
-      # from it and the solver needs more passes to meet its change test:
-      #   * the margin of the curvature bound is a factor 1 + δ with δ of the order of 2 n eps(T) = 0.24, so a pass
-      #     divides the error by about 1 + 1/δ ≈ 5 (pass 1 leaves 0.144, pass 2 leaves 0.028, in the runs below), and
-      #     a change below 1e-6 after the first 5 passes would need a factor of at most 0.035 per pass: `passes > 5`;
-      #   * the accuracy that the converged coefficient can reach is limited by the rounding of the correlation
-      #     x'r, a sum of n products in Float32, whose error is at most γₙ Σ|xᵢrᵢ| for any order of summation
-      #     (γₙ = n u/(1 - n u), u = eps(T)/2, so γₙ = 0.063), and Σ|xᵢrᵢ|/n = |1 - β| ≤ 0.3 near β = 0.75. The computed
-      #     stationarity condition is then off by at most γₙ 0.3 = 0.019 in the units of β, plus the stopping
-      #     tolerance and the rounding of the cached residual, which are below 1e-4. The bound used is twice the first
-      #     term plus the stopping tolerance, `bound` below (0.038). The error was 1.4e-5 to 2.9e-5 with vectorized
-      #     sums and 1.2e-4 with sequential sums (the sums are sequential under code coverage, as in CI): the
-      #     converged accuracy depends on the order of the sums, and the bound does not.
+      # from it and the solver needs more passes to meet its change test. The criteria below are empirical
+      # regression criteria; no bound on the error of the rounded iteration is derived for them:
+      #   * `passes > 5`: the curvature bound of a one-column group has the factor 1 + 2 n eps(T) = 1.24, so a pass
+      #     removes only part of the error. The converged runs took 22 to 24 passes without code coverage, 45 with
+      #     bounds checking on Julia 1.10, and 85 with code coverage (as in CI).
+      #   * `bound` = 0.038 for the error of the converged coefficient. The observed errors were 1.4e-5 to 2.9e-5
+      #     without code coverage and 1.2e-4 with it. The value is 2 γₙ 0.3 + 2 tol with
+      #     γₙ = n u/(1 - n u), u = eps(T)/2: a rounding scale for a Float32 sum of 10⁶ terms, used as a threshold.
+      #   * the one-pass error, 0.144, is about 3.8 times `bound`, so one pass is outside it.
       # The residual of the optimality condition is computed independently in BigFloat from the stored data.
       if T === Float32
         n1 = 10^6
@@ -696,7 +693,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
           Float64(abs(g + BigFloat(0.25) * sign(b)))
         end
         first_pass = @test_logs (:warn,) match_mode = :any group_lasso(x1, y1, T(0.25), [1:1], cyc(T; maxpasses = 1); intercept = false)
-        @test kkt1(first_pass) > bound                          # one pass is not within the attainable accuracy
+        @test kkt1(first_pass) > bound                          # one pass is outside the empirical bound
         full = group_lasso(x1, y1, T(0.25), [1:1], cyc(T); intercept = false)
         @test full.result.converged
         @test full.result.passes > 5
