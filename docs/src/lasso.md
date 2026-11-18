@@ -66,6 +66,67 @@ directly.
   while the stored coefficient is `0` (the exact value `1e-400` underflows) and
   `sum(abs2, residuals(fit))` is `2e-200`. The result of the solver is left as it returned it.
 
+## The elastic net
+
+The keyword `alpha` (`1` by default) mixes the ℓ₁ penalty with a ridge penalty. With
+`θⱼ = sⱼβⱼ` (so `θ = β` unless `standardize_x = true`), `lasso` minimizes
+
+```math
+\frac{1}{2n}\lVert y - \beta_0\mathbf{1} - X\beta\rVert_2^2
+  + \lambda \Bigl(\alpha \lVert \theta \rVert_1 + \frac{1-\alpha}{2} \lVert \theta \rVert_2^2\Bigr).
+```
+
+`alpha` is a finite `Real` with `0 < alpha ≤ 1`. `alpha = 1` is the lasso above, and `alpha < 1`
+adds the ridge term. Any other value, including a value that is not a `Real`, throws an
+`ArgumentError` that names the range; `alpha = 0`, a ridge penalty alone, is not supported.
+
+- **The effective parameters.** `alpha` is checked as given. Then `α = T(alpha)` and `λ_T = T(λ)`
+  are formed in the element type `T` of the data, and these two numbers are what the fit stores
+  as `fit.alpha` and `fit.λ`. If `α` is `1` in `T` (for example `alpha = 1 - 1e-9` with `Float32`
+  data), the fit is the lasso and `fit.alpha` is `1`. If `α` is `0` in `T` (for example
+  `alpha = 1e-50` with `Float32` data), or `λ > 0` and `λ_T * α` is `0`, the penalty would be a ridge
+  alone and an `ArgumentError` says so. Otherwise the penalty is ProximalBase's
+  `ElasticNet(λ₁, λ₂)` with `λ₁ = λ_T * α` and `λ₂ = λ_T * (1 - α)`, computed in `T`, so that
+  `fit.λ * fit.alpha` is `λ₁` and `fit.λ * (1 - fit.alpha)` is `λ₂`. `λ = 0` gives least squares.
+- **The solve.** The same `CDSolver` solves the problem on the same transformed data as for the
+  lasso (`Z`, `ỹ`, or `X`, `y` themselves with both keywords `false`), with `ElasticNet(λ₁, λ₂)` in
+  place of the ℓ₁ penalty, and the back-transformation and residuals are those of the lasso.
+  With `alpha` omitted, or equal to `1` (or to a value that is `1` in `T`), the penalty is
+  `NormL1(λ)` and the call is the lasso call.
+- **The zero solution.** With the weights `sⱼ`, `β = 0` (with `β₀ = ȳ`, or `0` without an
+  intercept) is a minimizer in exact arithmetic if and only if
+  `λ ≥ λmax = maxⱼ |x̃ⱼ'ỹ| / (n sⱼ α)`, over the columns with `sⱼ > 0`.
+- **Optimality conditions.** With `zⱼ = x̃ⱼ/sⱼ` (`x̃ⱼ` and `ỹ` as above) and `r = ỹ - Zθ`, a minimizer
+  has `|zⱼ'r/n| ≤ λα` where `θⱼ = 0` and `zⱼ'r/n - λ(1 - α)θⱼ = λα sign(θⱼ)` where `θⱼ ≠ 0`.
+- **Not glmnet.** No agreement with glmnet is claimed: glmnet scales `y` internally, which changes
+  the ridge part unless `sd(y) = 1`. Accordingly, `dof(fit)` for `alpha < 1` is the count of nonzero
+  coefficients that glmnet reports, not an unbiased estimate of the degrees of freedom of the fit.
+
+Three nearly collinear columns, with a response that depends on all three, fit by the lasso and
+by the elastic net at the same `λ`:
+
+```@example lasso
+using HighDimensionalModels, Random
+
+solver = CDSolver(order = :cyclic, momentum = false)
+rng3 = Xoshiro(2)
+n3, p3 = 100, 6
+z3 = randn(rng3, n3)
+Xc = hcat(z3 .+ 0.1 .* randn(rng3, n3, 3), randn(rng3, n3, p3 - 3))   # columns 1-3 share the factor z3
+yc = Xc[:, 1:3] * [1.0, 1.0, 1.0] + 0.5 * randn(rng3, n3)
+lasso_fit = lasso(Xc, yc, 0.2, solver)
+en_fit = lasso(Xc, yc, 0.2, solver; alpha = 0.5)
+(lasso = round.(lasso_fit.coefficients, digits = 3), elastic_net = round.(en_fit.coefficients, digits = 3))
+```
+
+For these data the lasso sets the third coefficient to `0` and gives the second the largest
+share, while the elastic net keeps the three correlated columns with coefficients of the same
+order. The printed form of a fit shows `α` when it is below `1`:
+
+```@example lasso
+en_fit
+```
+
 ## Inputs
 
 - `X::Matrix{T}` and `y::Vector{T}` with `T` equal to `Float32` or `Float64`; the fit has the
@@ -78,6 +139,8 @@ directly.
 - `size(X, 1) ≥ 1` is checked by this package. The remaining checks (a response of length `n`,
   `p ≥ 1`, finite entries of `X` and `y`, the level `λ`) are those of ProximalBase and
   ProximalSolvers; their errors are passed on unchanged.
+- `alpha` is a finite `Real` with `0 < alpha ≤ 1` (see [The elastic net](@ref)); it is converted to
+  `T`, and the stored `fit.alpha` is `T(alpha)`.
 - `intercept` and `standardize_x` are `true` or `false`; any other value throws an
   `ArgumentError` that names the keyword. With a keyword set, `size(y, 1) == size(X, 1)` and
   `size(X, 2) ≥ 1` are checked by this package (a `DimensionMismatch`), and the entries of `X`
@@ -100,15 +163,16 @@ fit
 ```
 
 [`LassoSolution`](@ref) has the fields `coefficients`, `residuals` (`y - intercept - X * coefficients`,
-on the data given to `lasso`, computed once), `λ`, `intercept`, `hasintercept` and `result`, the
-ProximalSolvers result unchanged. The StatsAPI methods are:
+on the data given to `lasso`, computed once), `λ`, `alpha` (`1` for a lasso fit), `intercept`,
+`hasintercept` and `result`, the ProximalSolvers result unchanged. The StatsAPI methods are:
 
 - `coef(fit)`: `[intercept; coefficients]` with an intercept, and `coefficients` (the same
   vector) without one;
 - `predict(fit, Xnew)`: `Xnew * coefficients`, plus the intercept with one; a `Xnew` with another
   number of columns throws a `DimensionMismatch`;
 - `residuals(fit)`, `nobs(fit)`;
-- `dof(fit)`: the number of nonzero coefficients, plus one with an intercept;
+- `dof(fit)`: the number of nonzero coefficients, plus one with an intercept (for `alpha < 1` the count
+  that glmnet reports, not an unbiased estimate);
 - `deviance(fit)`: the sum of the squared residuals.
 
 With an intercept and standardization:
@@ -136,13 +200,14 @@ optimality certificate, and this package adds no convergence flag of its own. A 
 a run that meets the test within the cap, even after one pass, returns `converged = true`.
 
 With `intercept = true` or `standardize_x = true`, `fit.result` is the result of ProximalSolvers
-on the transformed problem `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`. With `standardize_x = true`,
+on the transformed problem `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁` (with the penalty
+`λ(α‖θ‖₁ + (1 - α)‖θ‖²/2)` for `alpha < 1`). With `standardize_x = true`,
 `fit.result.minimizer` is `θ`, and not `coefficients` (in exact arithmetic `θⱼ = sⱼ βⱼ` for the
 mathematical back-map `βⱼ = θⱼ/sⱼ`; the stored slopes are the rounded divisions, with `0` for a column
 of scale `0`, and `θⱼ = sⱼ βⱼ` need not hold for them, see the limit of the back-map above) (with `intercept = true`
 alone, `θ = β` and the two are the same vector); `fit.result.minimum` is
-`‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the weighted objective above at `(β₀, β)` in exact
-arithmetic, not the plain lasso objective of `β`.
+the value of that problem's objective at `θ`, which equals the weighted objective above at `(β₀, β)` in
+exact arithmetic, not the plain lasso objective of `β`.
 
 `maxchange` and `tolerance` are the solver's. With `relative = true` (the default of `CDSolver`)
 and `ỹ ≠ 0`, `maxchange` is the largest `|Δθⱼ|‖Zⱼ‖/√n` of a pass and `tolerance` is
@@ -159,7 +224,8 @@ and the changes are not multiplied. For `X = reshape([1., 3., 5.], 3, 1)`, `y = 
 To check a fit without the solver's stopping rule, compare the correlations of the residuals
 with the penalty level: at a minimizer, `|Xⱼ'r|/n ≤ λ` for every column and `Xⱼ'r/n = λ sign(βⱼ)`
 where `βⱼ ≠ 0`, with `r = y - Xβ`. (With the keywords, the same holds for the columns `x̃ⱼ` of the
-objective above, centred or raw, `r = y - β₀ - Xβ` and `λ sⱼ` in place of `λ`.) Rounding limits the accuracy that can be attained, but what a
+objective above, centred or raw, `r = y - β₀ - Xβ` and `λ sⱼ` in place of `λ`; for `alpha < 1` the conditions
+are those of [The elastic net](@ref).) Rounding limits the accuracy that can be attained, but what a
 run achieved depends also on `tol`, `maxpasses` and the conditioning of `X`: a loose `tol` can
 report `converged = true` with large deviations. The deviations have to be measured, as below.
 
