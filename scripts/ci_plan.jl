@@ -405,57 +405,100 @@ function parse_results(text::AbstractString)
   return results, problems
 end
 
-"""
-    plan_problems(level, tests, jobs) -> (required, problems)
+"The names of the test files of `test/testsuite.toml`: the selections a plan can name."
+inventory_names(dir = ROOT) = TestSuite.alltests(TestSuite.load(joinpath(dir, "test", "testsuite.toml")))
 
-The jobs a plan requires, from its outputs `level`, `tests` and `jobs` (as `write_outputs` writes
-them), and what is wrong with them: an empty or unknown value, a repeated or mixed-in job, or a
-contradiction between the three (the test selection and the `test` job go together, and a `none`
-plan has neither).
 """
-function plan_problems(level::AbstractString, tests::AbstractString, jobs::AbstractString)
+    plan_problems(level, tests, jobs, names = inventory_names()) -> (required, problems)
+
+The jobs a plan requires, from its outputs `level`, `tests` and `jobs` as `write_outputs` writes
+them, and what is wrong with them. The valid outputs are the combinations that `plan`,
+`finish` and `full_plan` emit, in these terms (`names` are the inventory's test names):
+
+| output | syntax |
+|---|---|
+| `level` | one of `LEVELS` |
+| `tests` | `none`, `all`, or distinct names from `names` joined by `,` without empty items or spaces |
+| `jobs` | `none`, or distinct names from `JOBS` joined by single spaces (no leading or trailing space) |
+
+| level | `tests` | `jobs` |
+|---|---|---|
+| `none` | `none` | `none`, or jobs without `test` and `test-cross` |
+| `focused` | `all` or names | contain `test` |
+| `full` | `all` | contain every job of `FULL_JOBS` |
+
+A plan that requires `test-cross` requires `test` too. Anything else is a problem, among them an
+empty output, a name that is not in the inventory, a repeated name, and a selection combined
+with the wrong level or job list.
+"""
+function plan_problems(level::AbstractString, tests::AbstractString, jobs::AbstractString,
+                       names::AbstractVector{<:AbstractString} = inventory_names())
   problems = String[]
-  isempty(level) ? push!(problems, "the plan's level is missing or empty.") :
-    level in LEVELS || push!(problems, "the plan level is `$level`, not one of $(join(LEVELS, ", ")).")
-  isempty(tests) && push!(problems, "the plan's test selection is missing or empty.")
-  words = split(jobs)
-  required = String[]
-  if isempty(words)
-    push!(problems, "the plan's job list is missing or empty; a plan without jobs says `$NONE`.")
-  elseif words != [NONE]
-    for j in words
-      j in JOBS || push!(problems, "the plan names an unknown job `$j`.")
+  bad(msg) = push!(problems, msg)
+  isempty(level) ? bad("the plan's level is missing or empty.") :
+    level in LEVELS || bad("the plan level is `$level`, not one of $(join(LEVELS, ", ")).")
+  any(in((NONE, "all")), names) && bad("the inventory has a test named `$NONE` or `all`, which the plan outputs use as keywords.")
+  # The selection: none, all, or a list of distinct inventory names.
+  if isempty(tests)
+    bad("the plan's test selection is missing or empty.")
+  elseif tests != NONE && tests != "all"
+    items = split(tests, ','; keepempty = true)
+    for item in items
+      item in names || bad("the plan's test selection has `$item`, which is neither `$NONE`, `all` nor a test file of the inventory (items are separated by `,` without spaces).")
     end
-    allunique(words) || push!(problems, "the plan names a job twice.")
+    allunique(items) || bad("the plan's test selection names a test twice.")
+  end
+  # The job list: none, or distinct jobs separated by single spaces.
+  required = String[]
+  words = split(jobs)
+  if isempty(words)
+    bad("the plan's job list is missing or empty; a plan without jobs says `$NONE`.")
+  elseif words != [NONE]
+    join(words, " ") == jobs || bad("the plan's job list `$jobs` is not single-space separated.")
+    for j in words
+      j in JOBS || bad("the plan names an unknown job `$j`.")
+    end
+    allunique(words) || bad("the plan names a job twice.")
     required = String.(words)
   end
   if isempty(problems)
-    hastest, hastests = "test" in required, tests != NONE
-    hastests == hastest || push!(problems, "the plan's test selection is `$tests` but its jobs are `$jobs`.")
-    level == "none" && (hastest || hastests) && push!(problems, "a `none` plan has tests or the `test` job.")
-    level != "none" && !hastest && push!(problems, "a `$level` plan lacks the `test` job.")
-    "test-cross" in required && !hastest && push!(problems, "the plan requires test-cross without the `test` job.")
+    hastest = "test" in required
+    if level == "none"
+      tests == NONE || bad("a `none` plan selects tests (`$tests`).")
+      (hastest || "test-cross" in required) && bad("a `none` plan requires the `test` or `test-cross` job.")
+    elseif level == "focused"
+      tests != NONE || bad("a `focused` plan selects no tests.")
+      hastest || bad("a `focused` plan lacks the `test` job.")
+    else
+      tests == "all" || bad("a `full` plan selects `$tests`, not `all`.")
+      for j in FULL_JOBS
+        j in required || bad("a `full` plan lacks the `$j` job.")
+      end
+    end
+    "test-cross" in required && !hastest && bad("the plan requires test-cross without the `test` job.")
   end
   return required, problems
 end
 
 """
-    verdict(plan_result, plan_ok, plan_level, plan_tests, plan_jobs, results; problems = String[]) -> (passed, lines)
+    verdict(plan_result, plan_ok, plan_level, plan_tests, plan_jobs, results; problems = String[], names = inventory_names()) -> (passed, lines)
 
 The required check of a CI run. It passes only if the plan job succeeded and wrote its outputs,
-the plan's outputs are well formed and consistent (`plan_problems`), every job the plan required
+the plan's level, selection and jobs are one of the combinations the planner emits (the table of
+`plan_problems`), every job the plan required
 succeeded, and every other job was skipped: a job that ran without being required is a mismatch
 between the plan and the workflow. `results` maps each CI job to its `needs.<job>.result`; a job
 missing from it fails the check, and so does any entry of `problems` (from `parse_results`).
 """
 function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_level::AbstractString,
                  plan_tests::AbstractString, plan_jobs::AbstractString, results::AbstractDict;
-                 problems::AbstractVector{<:AbstractString} = String[])
+                 problems::AbstractVector{<:AbstractString} = String[],
+                 names::AbstractVector{<:AbstractString} = inventory_names())
   lines = String[]
   fail(msg) = push!(lines, "FAIL: " * msg)
   plan_result == "success" || fail("the plan job ended with `$(isempty(plan_result) ? "no result" : plan_result)`.")
   plan_ok == "true" || fail("the plan did not write a complete plan.")
-  required, plan_issues = plan_problems(plan_level, plan_tests, plan_jobs)
+  required, plan_issues = plan_problems(plan_level, plan_tests, plan_jobs, names)
   foreach(fail, plan_issues)
   foreach(fail, problems)
   for j in JOBS

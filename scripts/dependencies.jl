@@ -161,12 +161,51 @@ end
 manifest_names(v::VersionNumber = VERSION) =
   ("JuliaManifest-v$(v.major).$(v.minor).toml", "Manifest-v$(v.major).$(v.minor).toml", "JuliaManifest.toml", "Manifest.toml")
 
-"The manifest of `env` that Julia uses: the first of `manifest_names()` that exists."
+"""
+    manifest_file(env)
+
+The first of `manifest_names()` that exists in `env`. This is the manifest that Julia uses for
+`env/Project.toml` only when `check_project(env)` accepts the environment: a `manifest` key in
+the project, a `JuliaProject.toml`, or a `[workspace]` above `env` would make Julia use another
+file. `verify_manifest` also compares the file with Julia's own choice.
+"""
 function manifest_file(env)
   for name in manifest_names()
     isfile(joinpath(env, name)) && return joinpath(env, name)
   end
   error("no manifest in $env")
+end
+
+"""
+    check_project(env)
+
+Throw if Julia would use a project or a manifest for `env` other than the `Project.toml` that the
+scripts edit and the manifest that `manifest_file` reads:
+- `env` has a `JuliaProject.toml`, which Julia prefers to `Project.toml`;
+- `env/Project.toml` has a top-level `manifest` key, which names another manifest;
+- a `Project.toml` or `JuliaProject.toml` in a directory above `env` has a `[workspace]` table, so
+  that `env` could be one of its members, which share the workspace root's manifest.
+A `[workspace]` table or `[sources]` entries in `env/Project.toml` itself are not refused: a
+workspace root keeps its manifest next to its project, and an entry in `[sources]` for a package
+that the scripts develop by path does not replace that path (the manifest check fails if it did).
+"""
+function check_project(env)
+  isfile(joinpath(env, "JuliaProject.toml")) &&
+    error("$env has a JuliaProject.toml, which Julia prefers to the Project.toml that the scripts edit; remove it")
+  project = joinpath(env, "Project.toml")
+  isfile(project) || error("$env has no Project.toml")
+  haskey(TOML.parsefile(project), "manifest") &&
+    error("$project has a `manifest` key, which makes Julia use another manifest than the one checked; remove it")
+  dir = realpath(env)
+  while dirname(dir) != dir
+    dir = dirname(dir)
+    for name in ("JuliaProject.toml", "Project.toml")
+      file = joinpath(dir, name)
+      isfile(file) && haskey(TOML.parsefile(file), "workspace") &&
+        error("$file has a [workspace] table above $env, whose members share the workspace's manifest; use a directory outside it")
+    end
+  end
+  return env
 end
 
 """
@@ -197,11 +236,11 @@ end
 """
     develop(env, paths)
 
-Add to the environment `env` (an existing project) the packages at `paths` (name => directory)
-and the package itself, each by path, and install the rest. Does not read `[sources]` entries
-of any Project.toml except that of `env`.
+Add to the environment `env` (an existing project that `check_project` accepts) the packages at
+`paths` (name => directory) and the package itself, each by path, and install the rest.
 """
 function develop(env, paths)
+  check_project(env)
   specs = [Pkg.PackageSpec(; path = paths[name]) for name in PACKAGES]
   push!(specs, Pkg.PackageSpec(; path = ROOT))
   Pkg.activate(env)
@@ -215,10 +254,17 @@ end
 
 Throw unless the manifest of `env` lists the two dependencies and the package once each, tracked
 by path (no registry version, no repository revision) at exactly the directories of `paths` and
-the package root.
+the package root, and, if `env` has a Project.toml, unless that manifest is the one Julia selects
+for it (`Base.project_file_manifest_path`). Returns the manifest path.
 """
 function verify_manifest(env, paths)
   file = manifest_file(env)
+  project = joinpath(env, "Project.toml")
+  if isfile(project)
+    chosen = Base.project_file_manifest_path(project)
+    chosen !== nothing && realpath(chosen) == realpath(file) ||
+      error("Julia uses the manifest $(repr(chosen)) for $project, not $file")
+  end
   deps = get(TOML.parsefile(file), "deps", Dict{String,Any}())
   isempty(deps) && error("$file has no `deps` table (manifest format 2 expected)")
   expected = [(name, paths[name], uuid(name)) for name in PACKAGES]

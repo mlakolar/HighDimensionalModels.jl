@@ -287,12 +287,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
         run: |
-          title="CI failing on master"
+          export title="CI failing on master"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           body="The $EVENT run $url failed at $GITHUB_SHA. The job summaries list the commits of ProximalBase and ProximalSolvers it used; the dependency receipts are attached to the run."
-          # The list of open issues, not the search index, which can lag behind a new issue.
-          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title \
-            --jq '[.[] | select(.title == "CI failing on master")][0].number // empty')
+          # Every open issue, page by page (pull requests are listed too and have a `pull_request`
+          # key), not the search index, which can lag behind a new issue. If the listing fails the
+          # assignment fails and bash -e stops the step, so a failed or partial listing is not
+          # read as "no tracker" and nothing is created.
+          numbers=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
+            --jq '.[] | select((has("pull_request") | not) and .title == env.title) | .number')
+          number=$(printf '%s\n' "$numbers" | sort -n | sed -n '1p')
           if [ -n "$number" ]; then
             gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
           else

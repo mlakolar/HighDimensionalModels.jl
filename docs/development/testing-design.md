@@ -25,12 +25,19 @@ the two repositories (`scripts/dependencies.jl`; the benchmark environment takes
   (no registry version, no repository revision). PS's `Project.toml` has a `[sources]` entry that pins
   PB to an older commit; in the manifests generated here with Julia 1.10 (which ignores `[sources]`)
   and 1.13, PB is tracked by path at the requested commit, not at that pin. The check fails if a
-  manifest ever tracks PB another way. Then, in a process of the environment (`scripts/dependencies.jl`,
+  manifest ever tracks PB another way. The scripts refuse an environment in which Julia would use another
+  project or manifest than the ones they edit and check: a `JuliaProject.toml`, a top-level `manifest` key
+  in its `Project.toml`, or a `[workspace]` table in a project file above it (a member shares the
+  workspace root's manifest). On Julia 1.13 a `[sources]` entry for PB in the environment's own
+  `Project.toml` did not replace the path development (the manifest tracked the path), and a
+  `[workspace]` table in the environment's own project leaves its manifest next to it, so neither is refused;
+  `verify_manifest` also fails unless its manifest is the one `Base.project_file_manifest_path` selects.
+  Then, in a process of the environment (`scripts/dependencies.jl`,
   run by both entry points, and again inside the test run by `test/dependencies.jl`),
   `pkgdir(ProximalBase)` and `pkgdir(ProximalSolvers)` are the checkouts, whose `HEAD` equals the
-  requested commits and whose trees are clean, and PB is a 0.6 development version. The manifest is
-  the first existing file of Julia's own list of manifest names (`JuliaManifest-vX.Y.toml`,
-  `Manifest-vX.Y.toml`, `JuliaManifest.toml`, `Manifest.toml`), the one Pkg and the test process use.
+  requested commits and whose trees are clean, and PB is a 0.6 development version. In an accepted
+  environment the manifest is the first existing file of Julia's own list of manifest names
+  (`JuliaManifest-vX.Y.toml`, `Manifest-vX.Y.toml`, `JuliaManifest.toml`, `Manifest.toml`).
 - **Receipt.** The commits, tree SHAs, versions and paths, the package's commit and whether its tree
   has changes, Julia and the platform, and the manifest path; the test run's receipt also lists the
   test files that ran. CI uploads the receipt and the manifest of the test, cross-platform and
@@ -132,10 +139,13 @@ One workflow, `CI.yml`:
 every planned job succeeded, and every unplanned job was skipped. A failed, cancelled or unexpectedly
 skipped required job fails it (`always()` runs the gate after its dependencies have finished, with any result, and it sees only their
 results). It reads `needs.*.result` and the plan outputs, not the
-REST API. The plan's `level`, `tests` and `jobs` outputs must be present and consistent: a plan
-without jobs or tests writes `none`, so an output that is missing or empty is not read as an empty
-plan, and a test selection without the `test` job (or the reverse, or a `none` level with either)
-fails the gate. The results must be one `job=result` word per job with a known result, and a repeated
+REST API. The plan's `level`, `tests` and `jobs` outputs must be one of the combinations the planner
+emits (the tables in the docstring of `CIPlan.plan_problems`, derived from `LEVELS`, `JOBS`,
+`FULL_JOBS` and the inventory): `none` has tests `none` and no `test` or `test-cross` job; `focused`
+has `all` or a comma-separated list of distinct inventory names, and the `test` job; `full` has `all`
+and every job of `FULL_JOBS`; `test-cross` needs `test`. A plan without jobs or tests writes `none`,
+so a missing or empty output is not read as an empty plan, and a whitespace-only, repeated, empty or
+unknown item fails the gate. The results must be one `job=result` word per job with a known result, and a repeated
 job is an error rather than an overwrite. The rule is `CIPlan.verdict` in `scripts/ci_plan.jl`,
 tested in `test/ci_plan.jl`, which also checks that the workflow defines every job the rule knows,
 that the gate needs them all and receives the plan's outputs, that no step has `continue-on-error`
@@ -158,8 +168,11 @@ nothing else. In the `run:` steps, event data and plan outputs reach scripts thr
 
 **Failures on master.** A failing push, nightly or manual run on master opens an issue titled "CI
 failing on master" or comments on the open one, found by its exact title in the list of open issues.
-The `report` jobs of different runs share one concurrency group and run one at a time. GitHub keeps
-at most one pending job per group, so with several simultaneous failures a report can be dropped: a
-comment is lost, but a second issue is not created. The nightly full runs are the audit of the map: when
+The job reads every open issue (the paginated REST API, excluding pull requests), takes the
+lowest-numbered one with exactly that title, and creates an issue only when there is none; if the
+listing fails the step fails and nothing is created. The `report` jobs of different runs share one
+concurrency group and run one at a time. GitHub keeps at most one pending job per group, so with
+several simultaneous failures a report can be dropped, which loses a comment. An issue with that
+title that someone closes, or creates by hand, is outside what the job controls. The nightly full runs are the audit of the map: when
 a full run fails on a commit whose PR passed a selective run, record the miss in `test/impact.toml`
 under `[[miss]]` and fix the rule.
