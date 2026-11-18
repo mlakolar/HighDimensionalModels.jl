@@ -67,8 +67,10 @@ case64(A::AbstractMatrix) = Matrix{Float64}(A)
 case64(v::AbstractVector) = Vector{Float64}(collect(v))
 case64(x::Real) = Float64(x)
 
-# Columns centered and scaled to mean square one (a constant column becomes zero)
-# and the response centered. These are the coordinates in which the earlier
+# Columns centered and scaled to mean square one (a column whose entries are all equal
+# has that value as its mean and becomes zero) and the response centered. The scales
+# are computed from squares, which is adequate for the moderate magnitudes of the
+# scenarios of problems.jl. These are the coordinates in which the earlier
 # standardized lasso with an intercept solved the same scenarios, and in which
 # the cases other than `dense-standardized` call `lasso` with its defaults: the
 # objective with an intercept and scales in the original coordinates is this one
@@ -78,7 +80,7 @@ function standardized(X, y)
   Z = similar(X, Float64)
   for j in axes(X, 2)
     x = view(X, :, j)
-    c = sample_mean(x)
+    c = all(==(first(x)), x) ? first(x) : sample_mean(x)
     s = sqrt(sample_mean(abs2.(x .- c)))
     Z[:, j] .= s > 0 ? (x .- c) ./ s : 0.0
   end

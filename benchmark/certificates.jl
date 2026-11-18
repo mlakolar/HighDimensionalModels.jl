@@ -9,7 +9,8 @@
 #
 # A certificate returns (; value, measure, status, note), with status :ok or
 # :uncertifiable (value NaN, and a note saying why). Nonfinite inputs are
-# uncertifiable, not a zero gap. All arithmetic is in Float64.
+# uncertifiable, not a zero gap. The arithmetic is in Float64, except in
+# `lasso_gap_standardized` (below).
 #
 # Relative gap (measure :relative_gap): (P - D)/max(|P|, floatmin) for the
 # primal value P at the returned point and a dual (lower) bound D. With the
@@ -26,13 +27,23 @@
 #
 #   ‖y - β₀1 - Xβ‖²/(2n) + λ Σⱼ sⱼ|βⱼ|,
 #
-# with sⱼ the root mean square of the centred column xⱼ - x̄ⱼ (0 for a column of
-# exact zeros after centring, which the penalty ignores). Its primal value is
-# evaluated on the raw data at (β₀, β); its dual point comes from the centred and
-# scaled problem, computed here with sums in a fixed order. The relative gap is
-# as above. The profiled minimum over β₀ is the minimum of the centred problem,
-# so the dual value bounds it from below, and a perturbed β₀ raises the primal
-# value and with it the gap.
+# with sⱼ the root mean square of the centred column xⱼ - x̄ⱼ. A column whose
+# entries are all equal has that value as its mean, so that it centres to exact
+# zeros and has scale 0 (the penalty ignores it); a constant response is centred
+# in the same way. Means, centred columns, scales and the dual point are computed
+# here in 256-bit BigFloat from the stored Float64 entries, with the terms added
+# in a fixed order, so that no square underflows or overflows. Its primal value is
+# evaluated on the raw data at (β₀, β) in Float64. The dual point comes from the
+# centred and scaled problem; it is scaled down (rounding the scale down to a
+# Float64) until |x̃ⱼ'θ| ≤ λ sⱼ holds for every column in the original coordinates,
+# which is checked in BigFloat, and the certificate is :ok only if it holds. A
+# column that is not all zeros after centring and whose scale is not a normal
+# Float64 (it rounds to zero, is subnormal, or is not finite) makes the
+# certificate :uncertifiable. The relative gap is as above. In exact arithmetic
+# the profiled minimum over β₀ is the minimum of the centred problem, so the dual
+# value bounds it from below; a perturbation of β₀ away from the profiled
+# optimum for the fixed slopes raises the primal value and with it the gap
+# (a perturbation toward it lowers it).
 
 using LinearAlgebra
 
@@ -115,36 +126,75 @@ function lasso_parts(X, y, β, λ)
   (; P, D, θ = t .* θ, t, scale, terms = max(n, p), kkt = nothing)
 end
 
-# The mean of v with the terms added in order
-function fixed_mean(v)
-  s = 0.0
+# The mean of v in BigFloat with the terms added in order; the value of a vector whose
+# entries are all equal
+function exact_mean(v)
+  v1 = first(v)
+  all(==(v1), v) && return BigFloat(v1)
+  acc = zero(BigFloat)
   for t in v
-    s += t
+    acc += BigFloat(t)
   end
-  s / length(v)
+  acc / length(v)
 end
 
-# The columns of X centred, divided by their root mean squares (columns that are
-# exact zeros after centring stay zero, with scale 0), and the scales; the sums
-# add in a fixed order
-function centered_scaled(X)
-  Z = similar(X)
-  s = zeros(size(X, 2))
-  for j in axes(X, 2)
+# The columns of X centred (in BigFloat, with the exact mean of a constant column) and
+# their root mean squares sⱼ = sqrt(Σᵢ x̃ᵢⱼ²/n), which are 0 for a column of exact zeros
+# (BigFloat has no underflow of squares at these magnitudes). Call inside
+# `setprecision(BigFloat, 256)`.
+function centered_columns(X)
+  n, p = size(X)
+  Xt = Matrix{BigFloat}(undef, n, p)
+  s = zeros(BigFloat, p)
+  for j in 1:p
     x = view(X, :, j)
-    c = fixed_mean(x)
-    z = x .- c
-    s[j] = sqrt(fixed_mean(abs2.(z)))
-    Z[:, j] = s[j] > 0 ? z ./ s[j] : zero(z)
+    c = exact_mean(x)
+    for i in 1:n
+      Xt[i, j] = BigFloat(x[i]) - c
+    end
+    if any(!iszero, view(Xt, :, j))
+      acc = zero(BigFloat)
+      for i in 1:n
+        acc += Xt[i, j]^2
+      end
+      s[j] = sqrt(acc / n)
+    end
   end
-  Z, s
+  Xt, s
 end
 
-# P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ| for r = y - β₀ - Xβ, from the raw data. The dual point is
-# built from the centred residual u = r - r̄ (which sums to 0): with θ = u/n and
-# t = min(1, λ/‖Z'θ‖∞) for the scaled centred columns Z, it is tθ, and with the centred
-# response ỹ the dual value is D = t ỹ'θ - t² n‖θ‖²/2, a lower bound on the minimum of the
-# centred problem by weak duality.
+# A scale that is not a normal Float64 for a column that is not all zeros: its index, or 0
+function bad_scale(Xt, s)
+  for j in eachindex(s)
+    (iszero(s[j]) && any(!iszero, view(Xt, :, j))) && return j     # cannot happen in BigFloat
+    iszero(s[j]) && continue
+    sf = Float64(s[j])
+    (isfinite(sf) && sf >= floatmin(Float64)) || return j
+  end
+  0
+end
+
+# The columns of X centred and divided by their scales (zero for a column of scale 0) and the
+# scales, as Float64, from centered_columns; an error if a scale is not a normal Float64
+function centered_scaled(X)
+  setprecision(BigFloat, 256) do
+    Xt, s = centered_columns(X)
+    j = bad_scale(Xt, s)
+    j == 0 || error("the scale of column $j is not a normal Float64")
+    Z = Float64.(Xt ./ transpose(ifelse.(iszero.(s), one(BigFloat), s)))
+    Z, Float64.(s)
+  end
+end
+
+# P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ| for r = y - β₀ - Xβ, from the raw data in Float64. The dual
+# point is built from the centred residual u = r - r̄ (which sums to 0 in exact arithmetic):
+# θ = u/n, scaled to tθ with the largest t ≤ 1 (rounded down to a Float64) such that
+# |x̃ⱼ'(tθ)| ≤ λ sⱼ for every column j, the constraint in the original coordinates (the same as
+# |Zⱼ'(tθ)| ≤ λ for the scaled columns Zⱼ = x̃ⱼ/sⱼ). With the centred response ỹ the dual value
+# is D = t ỹ'θ - t² n‖θ‖²/2, a lower bound on the minimum of the centred problem by weak
+# duality. The sums for D, t and the feasibility `feasibility` = maxⱼ |x̃ⱼ'(tθ)|/(λ sⱼ) are
+# formed in BigFloat; `feasibility` ≤ 1 for a dual feasible point. Returns a String with the
+# reason when there is no certificate.
 function lasso_standardized_parts(X, y, β₀, β, λ)
   d = cert_regression(X, y, β)
   d isa String && return d
@@ -152,24 +202,39 @@ function lasso_standardized_parts(X, y, β₀, β, λ)
   cert_finite(λ) && λ > 0 || return "λ must be finite and positive"
   (; X, y, β, n, p) = d
   β₀, λ = f64(β₀), f64(λ)
-  Z, s = centered_scaled(X)
-  fit = X * β
-  r = y .- β₀ .- fit
-  penalty = λ * dot(s, abs.(β))
-  P = dot(r, r) / (2n) + penalty
-  u = r .- fixed_mean(r)
-  θ = u ./ n
-  ỹ = y .- fixed_mean(y)
-  t = box_scale(transpose(Z) * θ, λ)
-  D = t * dot(ỹ, θ) - t^2 * dot(u, u) / (2n)
-  magnitude = abs.(y) .+ abs(β₀) .+ abs.(fit)
-  scale = dot(magnitude, magnitude) / (2n) + penalty + t * dot(abs.(ỹ), abs.(θ)) + t^2 * dot(u, u) / (2n)
-  (; P, D, θ = t .* θ, t, scale, terms = max(n, p))
+  setprecision(BigFloat, 256) do
+    Xt, sb = centered_columns(X)
+    j = bad_scale(Xt, sb)
+    j == 0 || return "the scale of column $j of X is not a normal Float64 (zero, subnormal or not finite)"
+    s = Float64.(sb)
+    fit = X * β
+    r = y .- β₀ .- fit
+    penalty = λ * dot(s, abs.(β))
+    P = dot(r, r) / (2n) + penalty
+    cert_finite(P, r) || return "nonfinite primal value"
+    ỹ = BigFloat.(y) .- exact_mean(y)
+    rb = BigFloat.(r)
+    θ = (rb .- exact_mean(r)) ./ n
+    g = [sum(Xt[i, j] * θ[i] for i in 1:n) for j in 1:p]      # x̃ⱼ'θ, in the order of i
+    t = one(BigFloat)
+    for j in 1:p
+      iszero(sb[j]) && continue
+      abs(g[j]) > λ * sb[j] && (t = min(t, BigFloat(λ) * sb[j] / abs(g[j])))
+    end
+    tf = Float64(t, RoundDown)
+    feasibility = maximum(j -> iszero(sb[j]) ? zero(BigFloat) : tf * abs(g[j]) / (BigFloat(λ) * sb[j]), 1:p)
+    θt = tf .* θ
+    D = tf * sum(ỹ[i] * θ[i] for i in 1:n) - tf^2 * n * sum(abs2, θ) / 2
+    scale = Float64(sum((abs(BigFloat(y[i])) + abs(β₀) + abs(fit[i]))^2 for i in 1:n) / (2n)) + penalty +
+            Float64(tf * sum(abs(ỹ[i]) * abs(θ[i]) for i in 1:n) + tf^2 * n * sum(abs2, θ) / 2)
+    (; P, D = Float64(D), θ = Float64.(θt), t = tf, feasibility = Float64(feasibility), scale, terms = max(n, p))
+  end
 end
 
 function lasso_gap_standardized(X, y, β₀, β, λ)
   a = lasso_standardized_parts(X, y, β₀, β, λ)
   a isa String && return uncertifiable(a)
+  a.feasibility <= 1 + 1e-12 || return uncertifiable("the dual point is not feasible: maxⱼ |x̃ⱼ'θ|/(λ sⱼ) = $(a.feasibility)")
   relative_gap(a.P, a.D; a.scale, a.terms)
 end
 

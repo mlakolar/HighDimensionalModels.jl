@@ -16,6 +16,7 @@ include(joinpath(@__DIR__, "certificates.jl"))
 const TIGHT = 1e-11       # a gap or residual at a solution known in closed form
 
 ok(c) = c.status === :ok
+mean_of(v) = sum(v) / length(v)
 bad(c) = c.status === :uncertifiable && isnan(c.value)
 
 # θ of least norm with X'θ = v (X has full column rank and n ≥ p)
@@ -42,9 +43,9 @@ end
 
 # a standardized lasso with an intercept whose solution (β₀, β) is known by construction: the
 # centred and scaled columns Z and the scales s are those of the certificate; θ is a dual point
-# in the range of Z (whose columns sum to zero, so θ does too) with Z'θ ∈ λ∂‖sβ‖₁, and
-# y = β₀ + Xβ + nθ. The residual of (β₀, β) is then nθ, and the optimality conditions of
-# ‖y - β₀ - Xβ‖²/(2n) + λΣ sⱼ|βⱼ| hold in β₀ and β.
+# in the range of Z (whose columns sum to zero in exact arithmetic, so θ does too, up to rounding)
+# with Z'θ ∈ λ∂‖sβ‖₁, and y = β₀ + Xβ + nθ. The residual of (β₀, β) is then nθ, and the
+# optimality conditions of ‖y - β₀ - Xβ‖²/(2n) + λΣ sⱼ|βⱼ| hold in β₀ and β up to rounding.
 function designed_standardized(rng; n = 60, p = 8, λ = 0.1, β₀ = 1.5)
   X = randn(rng, n, p) .* transpose(0.5 .+ 2 .* rand(rng, p)) .+ transpose(3 .* randn(rng, p))
   Z, s = centered_scaled(X)
@@ -151,6 +152,7 @@ end
     a = lasso_standardized_parts(d.X, d.y, β₀, β, d.λ)
     @test ok(lasso_gap_standardized(d.X, d.y, β₀, β, d.λ))
     @test all(abs.(transpose(d.Z) * a.θ) .<= d.λ * (1 + 1e-12))
+    @test a.feasibility <= 1
     @test a.D ≤ a.P && a.D ≤ lasso_standardized_parts(d.X, d.y, d.β₀, d.β, d.λ).P + 1e-13
   end
   # a column that is constant has scale 0 and is ignored by the penalty
@@ -158,11 +160,35 @@ end
   @test lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.0], d.λ).value ≤ TIGHT
   @test ok(lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.5], d.λ))
   # at λ ≥ λmax = maxⱼ |zⱼ'ỹ|/n of the centred and scaled problem the solution is β = 0, β₀ = ȳ
-  ỹ = d.y .- fixed_mean(d.y)
+  ỹ = d.y .- mean_of(d.y)
   λmax = maximum(abs.(transpose(d.Z) * ỹ)) / n
-  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), λmax).value ≤ TIGHT
-  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), 2λmax).value ≤ TIGHT
-  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), 0.9λmax).value > 1e-4
+  @test lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), λmax).value ≤ TIGHT
+  @test lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), 2λmax).value ≤ TIGHT
+  @test lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), 0.9λmax).value > 1e-4
+  # a column whose squares underflow has a representable scale: the gap of β = 0 on
+  # X = (1e-200, -1e-200)', y = (1, -1) is not 0. The optimum is β ≈ 9e199 with objective 0.095, and the
+  # dual point scaled into |x̃'θ| ≤ λs (t = 0.1) has D = 0.095, while P(0) = 0.5
+  Xu, yu = reshape([1e-200, -1e-200], 2, 1), [1.0, -1.0]
+  c = lasso_gap_standardized(Xu, yu, 0.0, [0.0], 0.1)
+  @test ok(c) && c.value > 0.8
+  a = lasso_standardized_parts(Xu, yu, 0.0, [0.0], 0.1)
+  @test a.P == 0.5 && a.feasibility <= 1
+  @test a.D ≈ 0.095 rtol = 1e-14
+  @test a.t ≈ 0.1 rtol = 1e-14
+  @test lasso_gap_standardized(Xu, yu, 0.0, [9e199], 0.1).value <= TIGHT      # the optimum
+  # the exact constant rule: a constant column has scale exactly 0, whatever its mean in floating point
+  @test centered_scaled(fill(0.1, 10, 1))[2] == [0.0]
+  @test centered_scaled(fill(1 / 3, 7, 2))[1] == zeros(7, 2)
+  c = lasso_gap_standardized([fill(0.1, 10) randn(rng, 10)], randn(rng, 10), 0.0, [0.0, 0.0], 0.1)
+  @test ok(c)
+  # a column that is not all zeros whose scale is not a normal Float64 is uncertifiable
+  tiny = reshape([5e-324; zeros(99)], :, 1)
+  @test bad(lasso_gap_standardized(tiny, randn(rng, 100), 0.0, [0.0], 0.1))
+  @test occursin("scale of column 1", lasso_gap_standardized(tiny, randn(rng, 100), 0.0, [0.0], 0.1).note)
+  sub = reshape(1e-310 .* randn(rng, 20), :, 1)
+  @test bad(lasso_gap_standardized(sub, randn(rng, 20), 0.0, [0.0], 0.1))
+  huge = reshape([floatmax(), -floatmax(), floatmax() / 3, 0.0], :, 1)
+  @test ok(lasso_gap_standardized(huge, [1.0, 2.0, 3.0, 4.0], 0.0, [0.0], 0.1))      # centring in BigFloat does not overflow
   # element types are converted, and invalid inputs are uncertifiable
   X32, y32, β32 = Float32.(d.X), Float32.(d.y), Float32.(d.β)
   @test lasso_gap_standardized(X32, y32, 1.5f0, β32, Float32(d.λ)).value ==
