@@ -47,12 +47,13 @@ changes(dir) = git(dir, "status", "--porcelain", "--untracked-files=all")
 
 "The tip of `refs/heads/master` of `url`; throws if it cannot be read."
 function master_revision(url)
-  out = try
-    read(Cmd(["git", "ls-remote", url, "refs/heads/master"]), String)
-  catch err
-    error("cannot resolve master of $url (git ls-remote failed); set the revision explicitly ",
-          "or retry: ", sprint(showerror, err))
-  end
+  output, messages = IOBuffer(), IOBuffer()
+  process = run(pipeline(Cmd(Cmd(["git", "ls-remote", url, "refs/heads/master"]); ignorestatus = true);
+                         stdout = output, stderr = messages))
+  success(process) ||
+    error("cannot resolve master of $url (git ls-remote failed with exit code $(process.exitcode)); ",
+          "set the revision explicitly or retry: ", strip(String(take!(messages))))
+  out = String(take!(output))
   lines = split(out, '\n'; keepempty = false)
   fields = length(lines) == 1 ? split(lines[1]) : String[]
   length(fields) == 2 && fields[2] == "refs/heads/master" && issha(fields[1]) ||

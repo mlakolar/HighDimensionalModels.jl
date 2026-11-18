@@ -41,8 +41,8 @@ The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is
 The convergence report is ProximalSolvers' (`fit.result.converged`, `passes`,
 `maxchange`, `tolerance`, `minimum`). For this problem `converged` reports the
 coefficient-change test of the solver (the largest change of a coefficient in a full
-pass against `tolerance`), not a bound on the distance to the minimum or on the KKT
-conditions. To check a fit, compute `maximum(abs, X' * residuals(fit)) / n` against `λ`
+pass, in the solver's scaling of the changes, against `tolerance`), not a bound on the
+distance to the minimum or on the KKT conditions. To check a fit, compute `maximum(abs, X' * residuals(fit)) / n` against `λ`
 and, on the support, `X[:, j]' * residuals(fit) / n` against `λ * sign(β[j])`.
 
 With `CDSolver()` the coordinate order is random and the default random number

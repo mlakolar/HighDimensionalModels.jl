@@ -52,7 +52,8 @@ methods.
 
 The result of the solver is `fit.result`, a `ProximalSolvers.CDResults`, with `converged`,
 `passes`, `maxchange`, `tolerance` and `minimum`. For this problem `converged = true` means that
-the largest change of a coefficient in a full pass was below `tolerance`; it is not an
+the largest change of a coefficient in a full pass, in the solver's scaling of the changes, was
+below `tolerance` (the `CDSolver` documentation of ProximalSolvers defines both); it is not an
 optimality certificate, and this package adds no convergence flag of its own. A run that reaches
 `maxpasses` without that test being met returns `converged = false` and ProximalSolvers warns.
 

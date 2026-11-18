@@ -166,17 +166,28 @@ jobs:
         run: python3 benchmark/check_analysis.py
       - name: Prepare the checkouts of ProximalBase and ProximalSolvers
         run: julia scripts/instantiate.jl --checkouts
-      # No timing is compared and nothing here is a performance gate. The commands after `setup.jl`
-      # follow the heading "CI integrity checks" of benchmark/README.md; keep them in step.
+      # No timing is compared and nothing here is a performance gate. The commands are those under
+      # the heading "CI integrity checks" of benchmark/README.md (its first command is the step
+      # "Check the analysis scripts" above); keep them in step.
       - name: Integrity checks of the benchmark harness
+        shell: bash
+        env:
+          PROXIMALBASE_CHECKOUT: ${{ github.workspace }}/.deps/ProximalBase.jl
+          PROXIMALSOLVERS_CHECKOUT: ${{ github.workspace }}/.deps/ProximalSolvers.jl
         run: |
-          env="$RUNNER_TEMP/benchmark-env"
-          out="$RUNNER_TEMP/benchmark-results"
-          julia benchmark/setup.jl "$PWD" "$env" "$HDM_DEPS_DIR/ProximalBase.jl" "$HDM_DEPS_DIR/ProximalSolvers.jl"
-          julia --project="$env" benchmark/check_certificates.jl
-          JULIA_NUM_THREADS=1 HDM_SUITE=quick HDM_GROUPS=lasso HDM_SAMPLES=3 HDM_SECONDS=0.2 \
-            HDM_OUTPUT="$out" HDM_EXPECTED_PACKAGE_ROOT="$PWD" julia --project="$env" benchmark/run.jl
-          python3 benchmark/validate.py "$out" "$out/validation.json"
+          ENV_DIR="$RUNNER_TEMP/hdm-bench-env"
+          OUT="$RUNNER_TEMP/hdm-bench-out"
+          julia benchmark/setup.jl "$PWD" "$ENV_DIR" "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT"
+          JULIA_NUM_THREADS=1 julia --project="$ENV_DIR" benchmark/check_certificates.jl
+          export HDM_EXPECTED_PACKAGE_ROOT="$PWD" HDM_SAMPLES=5 HDM_SECONDS=0.2 JULIA_NUM_THREADS=1
+          HDM_GROUPS=lasso HDM_OUTPUT="$OUT/lasso" julia --project="$ENV_DIR" benchmark/run.jl
+          python3 benchmark/validate.py "$OUT/lasso" "$OUT/lasso.json"
+          code=0
+          HDM_GROUPS=controls HDM_OUTPUT="$OUT/controls" julia --project="$ENV_DIR" benchmark/run.jl > "$OUT/controls.log" || code=$?
+          cat "$OUT/controls.log"
+          [ "$code" -eq 2 ]
+          grep -qx 'CASE controls/lasso/one-pass status=target_missed' "$OUT/controls.log"
+          python3 benchmark/validate.py "$OUT/controls" "$OUT/controls.json"
 
   test-cross:
     name: Julia 1 - ${{ matrix.os }}
