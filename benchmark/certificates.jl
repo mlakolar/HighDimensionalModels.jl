@@ -9,7 +9,7 @@
 #
 # A certificate returns (; value, measure, status, note), with status :ok or
 # :uncertifiable (value NaN, and a note saying why). Nonfinite inputs are
-# uncertifiable, never a zero gap. All arithmetic is in Float64.
+# uncertifiable, not a zero gap. All arithmetic is in Float64.
 #
 # Relative gap (measure :relative_gap): (P - D)/max(|P|, floatmin) for the
 # primal value P at the returned point and a dual (lower) bound D. With the
@@ -18,9 +18,11 @@
 # P - D < -tol is a weak-duality violation, which makes the case
 # uncertifiable, and -tol ≤ P - D < 0 counts as a zero gap.
 #
-# With λ = 0 the dual has equality constraints that no scaled point meets, so
-# the certificate reports the KKT residual (measure :kkt_residual), relative to
-# max(1, ‖X'y‖∞/n), instead of a gap.
+# With λ = 0 the dual constraint is X'θ = 0, and the scaling below gives
+# t = 0, so the dual point is zero and D = 0 unless X'r = 0: a gap would be one
+# at every point with X'r ≠ 0 and P > 0, however close that point is to the
+# minimum. So the certificate reports the KKT residual ‖X'r/n‖∞ (measure
+# :kkt_residual), relative to max(1, ‖X'y‖∞/n), instead of a gap.
 
 using LinearAlgebra
 
@@ -76,9 +78,11 @@ function cert_regression(X, y, β)
   (; X = f64(X), y = f64(y), β = f64(β), n = length(y), p = length(β))
 end
 
-# P = ‖r‖²/(2n) + λ‖β‖₁ for r = y - Xβ. The dual point is θ = t r/n with
-# t = min(1, λ/‖X'r/n‖∞), so that ‖X'θ‖∞ ≤ λ, and the dual value is
-# t y'θ - t²‖r‖²/(2n), a lower bound on the minimum by weak duality.
+# P = ‖r‖²/(2n) + λ‖β‖₁ for r = y - Xβ. With θ = r/n, the dual point is tθ,
+# t = min(1, λ/‖X'θ‖∞), so that ‖X'(tθ)‖∞ ≤ λ, and the dual value is
+# D = t y'θ - t² n‖θ‖²/2, a lower bound on the minimum by weak duality; the
+# returned θ is tθ. For X = I (n = 2), y = (2, -1), β = 0 and λ = 0.5: θ = (1, -0.5),
+# t = 0.5, D = 0.5·2.5 - 0.25·1.25 = 0.9375.
 function lasso_parts(X, y, β, λ)
   d = cert_regression(X, y, β)
   d isa String && return d

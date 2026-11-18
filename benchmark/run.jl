@@ -42,9 +42,11 @@ end
 # The Julia files of this folder, not those of generated environments below it
 harness_files() = [joinpath(@__DIR__, name) for name in readdir(@__DIR__) if endswith(name, ".jl")]
 
-# The commit and whether tracked files differ from it, for a checkout at its
-# repository root; "unavailable" and dirty for a directory that is not one
-function git_identity(root)
+# The commit and whether the tree differs from it, for a checkout at its
+# repository root (untracked files count with `untracked = true`);
+# "unavailable" and dirty for a directory that is not one
+function git_identity(root; untracked::Bool = false)
+  mode = untracked ? "--untracked-files=all" : "--untracked-files=no"
   revision = try
     top = readchomp(pipeline(`git -C $root rev-parse --show-toplevel`; stderr = devnull))
     realpath(top) == realpath(root) || error("not the root of its repository")
@@ -53,7 +55,7 @@ function git_identity(root)
     "unavailable"
   end
   dirty = try
-    !isempty(readchomp(pipeline(`git -C $root status --porcelain --untracked-files=no`; stderr = devnull)))
+    !isempty(readchomp(pipeline(`git -C $root status --porcelain $mode`; stderr = devnull)))
   catch
     true
   end
@@ -61,9 +63,9 @@ function git_identity(root)
 end
 
 # The checkout that a loaded package comes from: its root, commit, dirty flag and version
-function source_identity(mod::Module)
+function source_identity(mod::Module; untracked::Bool = false)
   root = realpath(dirname(dirname(pathof(mod))))
-  revision, dirty = git_identity(root)
+  revision, dirty = git_identity(root; untracked)
   version = pkgversion(mod)
   (; root, revision, dirty, version = version === nothing ? "unknown" : string(version))
 end
@@ -100,6 +102,21 @@ function selected_patterns(text)
 end
 escape_glob(pattern) = replace(pattern, r"[\\^$.|+()\[\]{}*?]" => s -> "\\" * s)
 
+# The loaded ProximalBase and ProximalSolvers; their trees count untracked files
+dependency_sources() = (source_identity(ProximalBase; untracked = true),
+                        source_identity(ProximalSolvers; untracked = true))
+
+# Records identify ProximalBase and ProximalSolvers by commit, so a measurement
+# needs both loaded from clean checkouts with a known commit
+function require_clean_dependencies()
+  for (name, source) in zip(("ProximalBase", "ProximalSolvers"), dependency_sources())
+    source.revision == "unavailable" &&
+      error("the loaded $name at $(source.root) is not the root of a git checkout; its commit is unknown")
+    source.dirty &&
+      error("the loaded $name at $(source.root) has tracked or untracked changes; use a clean checkout")
+  end
+end
+
 function runner_settings()
   suite = get(ENV, "HDM_SUITE", "quick")
   suite in ("quick", "extended") || error("HDM_SUITE must be quick or extended")
@@ -133,7 +150,7 @@ end
 function start_metadata(settings)
   s = settings
   package = source_identity(HighDimensionalModels)
-  base, solvers = source_identity(ProximalBase), source_identity(ProximalSolvers)
+  base, solvers = dependency_sources()
   Dict{String,Any}("julia" => string(VERSION), "rep" => s.rep, "suite" => s.suite,
     "groups" => join(s.groups, ','),
     "harness_hash" => fingerprint(@__DIR__, harness_files()),
@@ -373,6 +390,7 @@ end
 function main()
   try
     settings = runner_settings()
+    settings.list || require_clean_dependencies()
     catalog = build_catalog(settings.suite, settings.groups, settings.cases)
     if settings.list
       for spec in catalog

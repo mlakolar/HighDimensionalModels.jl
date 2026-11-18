@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 
 from compare import FIELDS, compare
 from summarize import mean_interval, summarize
-from validate import HEADERS, SERIES_SETTINGS, STATUSES, records, validate
+from validate import HEADERS, SERIES_SETTINGS, SOURCES, STATUSES, records, validate
 
 
 VERSION = "1.10.0"
@@ -514,6 +514,16 @@ def integrity_controls(root):
     invalid_mutation(folder, lambda: edit_meta(folder, "blas_threads", 2), "one Julia and one BLAS thread")
     for key in ("harness_hash", "package_hash", "package_sha", "proximalbase_sha", "proximalsolvers_sha"):
         invalid_mutation(folder, lambda key=key: edit_meta(folder, key, "bad"), "provenance hash")
+    # An unavailable commit of ProximalBase or ProximalSolvers is invalid.
+    for key in ("proximalbase_sha", "proximalsolvers_sha"):
+        invalid_mutation(folder, lambda key=key: edit_meta(folder, key, "unavailable"), "provenance hash")
+    # A dirty ProximalBase or ProximalSolvers tree is invalid; the measured package may be dirty.
+    for key in SOURCES:
+        invalid_mutation(folder, lambda key=key: edit_meta(folder, f"{key}_dirty", True),
+                         f"{key}_dirty must be false")
+    edit_meta(folder, "package_dirty", True)
+    assert validate(folder, 3)["valid"]
+    edit_meta(folder, "package_dirty", False)
     for key in ("package", "proximalbase", "proximalsolvers"):
         invalid_mutation(folder, lambda key=key: edit_meta(folder, f"{key}_dirty", "no"),
                          f"{key}_dirty must be boolean")
@@ -545,9 +555,8 @@ def integrity_controls(root):
     invalid_mutation(folder, lambda: edit_meta(folder, "package_hash", "e" * 40, rep=2),
                      "series settings changed")
     # The sources of ProximalBase and ProximalSolvers are constant within a series.
-    for key, value in (("proximalbase_sha", "f" * 40), ("proximalbase_dirty", True),
-                       ("proximalbase_version", "0.6.1"), ("proximalsolvers_sha", "f" * 40),
-                       ("proximalsolvers_dirty", True), ("proximalsolvers_version", "0.3.3")):
+    for key, value in (("proximalbase_sha", "f" * 40), ("proximalbase_version", "0.6.1"),
+                       ("proximalsolvers_sha", "f" * 40), ("proximalsolvers_version", "0.3.3")):
         invalid_mutation(folder, lambda key=key, value=value: edit_meta(folder, key, value, rep=2),
                          "series settings changed")
     invalid_mutation(folder, lambda: edit_rows(folder, "metrics", lambda rows: rows.append(rows[0])),
@@ -623,9 +632,8 @@ def compatibility_controls(root):
     replacements = dict(suite="extended", groups="lasso,controls", harness_hash="e" * 40,
                         blas="other", cpu_model="other", samples_target=10, seconds_limit=2.0,
                         case_seconds=30.0, profile_seconds=1.0, seed_scheme="other",
-                        proximalbase_sha="f" * 40, proximalbase_dirty=True, proximalbase_version="0.6.1",
-                        proximalsolvers_sha="f" * 40, proximalsolvers_dirty=True,
-                        proximalsolvers_version="0.3.3")
+                        proximalbase_sha="f" * 40, proximalbase_version="0.6.1",
+                        proximalsolvers_sha="f" * 40, proximalsolvers_version="0.3.3")
     assert set(replacements) == set(SERIES_SETTINGS) - {
         "package_hash", "julia_threads", "blas_threads", "dependencies"}
     for key, value in replacements.items():
@@ -635,6 +643,15 @@ def compatibility_controls(root):
         assert validate(folder, 3)["valid"]
         message = expect_error(lambda: compare(before, folder, root / f"reject-{key}", 3), "series settings differ")
         assert key in message
+    # Two series from the same dirty ProximalBase or ProximalSolvers commit are invalid, so that
+    # no comparison includes them.
+    for key in SOURCES:
+        folder = root / f"dirty-{key}"
+        fixture(folder)
+        edit_meta(folder, f"{key}_dirty", True)
+        assert not validate(folder, 3)["valid"]
+        message = expect_error(lambda: compare(folder, folder, root / f"reject-dirty-{key}", 3), "Invalid results")
+        assert f"{key}_dirty must be false" in message
     # A consistent series with other dependencies is valid but not comparable.
     dependency_changes = (("ProximalBase", "version", "0.6.1"), ("StatsAPI", "tree_hash", "e" * 40),
                           ("Extra", "version", "1.0.0"))

@@ -6,10 +6,9 @@
 
 using LinearAlgebra, Random, Statistics, SHA
 
-# Only the random draws are the same on every Julia version; BLAS, LAPACK and
-# Statistics may round differently. So the inputs are computed from the draws
-# by elementwise operations and by the products and moments below, which add
-# in a fixed order, and are then identical on Julia 1.10 and 1.13.
+# BLAS, LAPACK and Statistics may round differently between Julia versions. So
+# the inputs are computed from the draws by elementwise operations and by the
+# products and moments below, which add in a fixed order.
 function product(X::AbstractMatrix, b::AbstractVector)
   y = zeros(size(X, 1))
   for j in axes(X, 2), i in axes(X, 1)

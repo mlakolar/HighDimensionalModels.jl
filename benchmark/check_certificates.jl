@@ -129,7 +129,7 @@ end
 
 @testset "Scenarios" begin
   @test rand(scenario_rng("ls-200x50", 1), UInt64) == rand(Xoshiro(0x91bae84adbad28da), UInt64)
-  # the same hash on Julia 1.10 and 1.13, aarch64 and x86_64
+  # the hash of repetition 1, as pinned for the earlier harness
   @test data_hash(scenario("ls-200x50", 1)) == "ad8f0a23c3dd3989b99e6c74233b1aaafec8720b647d2099b9bb20de96aa2a38"
   required = ["ls-200x50", "ls-tall-5000x40", "ls-wide-100x400", "ls-corr-300x100", "ls-2000x1000"]
   @test all(in(SCENARIOS), required) && allunique(SCENARIOS)
