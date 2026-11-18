@@ -374,7 +374,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
     end
     @testset "a group with a redundant column: the same fitted values, another representative" begin
       # X = [a 2a] has rank 1. M⁻¹β is a corresponding solution, but the pivoted QR can return another one with the
-      # same contribution, so only the fitted values and the rank are asserted
+      # same contribution, so the test asserts the fitted values and the rank, and not the coefficients
       a = T[1, -1, 1, -1, 2, -2]
       Xd = hcat(a, 2a)
       Md = Diagonal(T[3, 1])
