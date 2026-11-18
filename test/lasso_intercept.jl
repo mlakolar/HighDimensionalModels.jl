@@ -130,8 +130,7 @@ end
 #   * the rounding of the preprocessing and of the back-transformation, c eps(T) (‖xⱼ‖ + √n|x̄ⱼ|)
 #     (‖y‖ + √n|ȳ|)/n with c = 16 (p + 4): the centred column and response carry errors of a few
 #     eps(T) per entry relative to |xᵢⱼ| and |x̄ⱼ|, and at an exact minimizer ‖r‖ ≤ ‖ỹ‖ and the
-#     centred fitted values satisfy ‖X̃β‖ ≤ 2‖ỹ‖ ≤ 2(‖y‖ + √n|ȳ|) (the run is within the
-#     tolerance of it). It also covers the rounding of the solver's own correlations.
+#     centred fitted values satisfy ‖X̃β‖ ≤ 2‖ỹ‖ ≤ 2(‖y‖ + √n|ȳ|). It also covers the rounding of the solver's own correlations.
 function kappa(fit, X::Matrix{T}, y::Vector{T}, ref) where T
   n, p = size(X)
   zmax = maximum(j -> iszero(ref.s[j]) ? 0.0 : Float64(norm(ref.Xt[:, j]) / ref.s[j]), 1:p)

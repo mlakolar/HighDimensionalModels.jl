@@ -41,22 +41,21 @@ directly.
   `0`; with `standardize_x = true` its scale is `0` and no division takes place. A zero
   column also gets `0` without an intercept. Without an intercept, a constant column that is not
   zero is an ordinary column: with `standardize_x = true`, `fill(0.1, n)` has the scale `0.1`.
-- **Nearly constant columns.** There is no tolerance. With `intercept = true` and
-  `standardize_x = true`, a column that is nearly constant but not constant, with variation small
-  relative to its level, has a scale `sⱼ` small relative to that level, hence a small penalty
-  `λsⱼ` on `βⱼ`, and its fitted coefficient can be large. (Without `standardize_x`, `sⱼ = 1`; with
-  it and without an intercept, `sⱼ` is the root mean square of the raw column, which is large for
-  a column of large level.) A column whose scale underflows to zero while it is not all zeros,
+- **Zero scale and the weight.** No tolerance decides a zero scale, only exact zeros after
+  centring. With `standardize_x = true`, the scale `sⱼ` of any other column is the root mean
+  square of its centred entries (of the column itself without an intercept), and the penalty
+  weight on `βⱼ` is `λsⱼ`. A column whose scale underflows to zero while it is not all zeros,
   and a design that overflows when centred or when the fit is scaled back, are refused with an
   `ArgumentError` that names `X` or `y` and the step.
 - **Overflow.** The means and the scales are computed from the entries divided by a power of
-  two near the largest entry, so they are finite when `‖xⱼ‖` overflows but the root mean square
-  does not. A design whose squares overflow, for example `Float32` columns near `1e20`, is
+  two not above the largest entry, so that the terms of the sums are at most 2 in absolute
+  value (at most 4 for the squares in a scale). A design whose squares overflow, for example `Float32` columns near `1e20`, is
   refused with an `ArgumentError` by the default call, because the solver's curvature
   overflows; with `standardize_x = true` the matrix `Z` is finite, and such data can be fit,
   provided that the centring, the scales, the solve and the back-map are representable. Centring
-  can itself overflow: `Float32[floatmax(Float32), floatmax(Float32), -floatmax(Float32)]` as a
-  column with `intercept = true` throws an `ArgumentError` even with `standardize_x = true`.
+  is computed in `T`, and an `ArgumentError` is thrown when a centred entry is not finite: for
+  example, `Float32[floatmax(Float32), floatmax(Float32), -floatmax(Float32)]` as a column with
+  `intercept = true` throws it, with either value of `standardize_x`.
 - **Limit of the back-map.** `βⱼ = θⱼ/sⱼ` is formed in the type `T`. A coefficient whose exact
   value is below the range of `T` underflows to a subnormal number or `0`, and the residuals on
   the original data, which use the stored `β`, then differ from those of the solver's problem.

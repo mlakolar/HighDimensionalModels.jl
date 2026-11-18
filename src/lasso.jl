@@ -66,15 +66,12 @@ given. The intercept is not penalized.
   value does not overflow.
 - `standardize_x = true` sets `sⱼ` to the root mean square of the column `xⱼ - x̄ⱼ` (the centred
   column with an intercept, the column itself without one), computed from the entries divided by
-  a power of two not above the largest `|x̃ᵢⱼ|`, which avoids the overflow of the norm of the column
-  when the root mean square is representable. A column whose centred entries are all zero
-  (a zero column, or a constant column with an intercept) has scale `0`: the solver keeps it at
-  zero and its coefficient is `0`. The decision uses no tolerance. With `intercept = true`, a
-  column that is nearly constant but not constant, whose variation is small relative to its level,
-  has a small `sⱼ` relative to that level, hence a small penalty `λsⱼ` on `βⱼ`, and its
-  coefficient can be large. (Without `standardize_x`, `sⱼ = 1`; with it and without an
-  intercept, `sⱼ` is the root mean square of the raw column, which is large for a column of large
-  level.) A constant column without an intercept is an ordinary column.
+  a power of two not above the largest `|x̃ᵢⱼ|`, so that the squares in the sum are at most 4. A
+  column whose centred entries are all zero (a zero column, or a constant column with an
+  intercept) has scale `0`: the solver keeps it at zero and its coefficient is `0`. No tolerance
+  decides a zero scale, only exact zeros after centring. For any other column, `sⱼ` is the root
+  mean square of its centred entries and the penalty weight on `βⱼ` is `λsⱼ`. A constant column
+  without an intercept is an ordinary column.
 
 The problem is solved on the centred and scaled data: `Z` has the columns `(xⱼ - x̄ⱼ)/sⱼ`, `ỹ` is
 `y - ȳ` with an intercept and `y` without one, and the solver minimizes the unweighted lasso
@@ -84,9 +81,10 @@ throws an `ArgumentError`. If a mean, a scale, an entry of `Z`, `β` or `β₀` 
 example, entries of opposite signs near `floatmax(T)` that overflow when centred), an
 `ArgumentError` names `X` or `y` and the step. Standardization lets a design whose squares overflow
 (for example `Float32` columns near `1e20`) be fit, which the default call refuses, provided that
-the centring, the scales, the solve and the back-map are representable; centring can itself overflow
-(entries near `floatmax(T)` of both signs with a mean that is not zero are refused even with both
-keywords). The back-map `θⱼ/sⱼ` has a limit of representation: a coefficient whose exact value is
+the centring, the scales, the solve and the back-map are representable. Centring is computed in `T`,
+and an `ArgumentError` is thrown when a centred entry is not finite; for example,
+`Float32[floatmax(Float32), floatmax(Float32), -floatmax(Float32)]` as a column with
+`intercept = true` throws it, with either value of `standardize_x`. The back-map `θⱼ/sⱼ` has a limit of representation: a coefficient whose exact value is
 below the range of `T` underflows (to a subnormal number or `0`), and the residuals on the original
 data, which use the stored `β`, then differ from those of the solver's problem. For example, with
 `X = reshape([-1e300, 1e300], 2, 1)`, `y = [-1e-100, 1e-100]`, `λ = 0` and `standardize_x = true`,
