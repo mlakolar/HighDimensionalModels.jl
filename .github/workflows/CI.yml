@@ -2,8 +2,8 @@ name: CI
 # The plan job decides what runs (scripts/ci_plan.jl, test/impact.toml; CONTRIBUTING.md) and fixes
 # the commits of ProximalBase and ProximalSolvers that every job of the run uses:
 # - pull requests and pushes to master: the complete test suite on Linux with Julia lts and 1,
-#   and the benchmark integrity checks. A change to documentation alone runs no job; a change to
-#   benchmark/ alone runs only the benchmark integrity checks.
+#   and the benchmark integrity checks. A change to documentation alone runs no package test and
+#   no benchmark job; a change to benchmark/ alone runs only the benchmark integrity checks.
 # - nightly and manual runs (`gh workflow run CI.yml --ref <branch>`): the same, plus macOS and
 #   Windows with Julia 1. A manual run may pin either commit with its inputs.
 # The `gate` job is the required check. It passes only if the plan succeeded and every job the
@@ -254,6 +254,8 @@ jobs:
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           PLAN_OK: ${{ needs.plan.outputs.ok }}
+          PLAN_LEVEL: ${{ needs.plan.outputs.level }}
+          PLAN_TESTS: ${{ needs.plan.outputs.tests }}
           PLAN_JOBS: ${{ needs.plan.outputs.jobs }}
           RESULTS: >-
             test=${{ needs.test.result }}
@@ -264,8 +266,14 @@ jobs:
   report:
     # A failing run on master (push, nightly, manual) opens an issue, or comments on the open one;
     # a manual run on another branch does not. No pull request code runs with this permission.
+    # The reports of different runs go one at a time through one concurrency group (GitHub keeps
+    # one pending job per group, so a report can be dropped when several runs fail at once, but
+    # two reports do not look for the issue at the same time).
     name: Report a failing run
     needs: gate
+    concurrency:
+      group: ${{ github.workflow }}-report
+      cancel-in-progress: false
     if: >-
       always() && needs.gate.result == 'failure' && github.event_name != 'pull_request' &&
       github.ref == 'refs/heads/master'
@@ -282,7 +290,9 @@ jobs:
           title="CI failing on master"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           body="The $EVENT run $url failed at $GITHUB_SHA. The job summaries list the commits of ProximalBase and ProximalSolvers it used; the dependency receipts are attached to the run."
-          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          # The list of open issues, not the search index, which can lag behind a new issue.
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title \
+            --jq '[.[] | select(.title == "CI failing on master")][0].number // empty')
           if [ -n "$number" ]; then
             gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
           else

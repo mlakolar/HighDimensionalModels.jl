@@ -6,8 +6,8 @@
 # them as full 40-character commit SHAs; an unset variable is resolved once, at the start of the
 # run, to the tip of the repository's master branch. A failure to resolve is an error. The
 # checkouts live in HDM_DEPS_DIR (default `.deps` in the package root), one directory per
-# package. The package is developed by path together with them, so no registered release of
-# ProximalBase or ProximalSolvers can take their place.
+# package. The package is developed by path together with them, and the manifest check fails if
+# a registered release of ProximalBase or ProximalSolvers took their place.
 module Dependencies
 
 using Dates, Pkg, TOML
@@ -157,9 +157,13 @@ end
 
 # ---- environments -------------------------------------------------------------------------
 
-"The manifest next to `Project.toml` in `env`, as Julia chooses it."
+"The manifest file names of Julia `v` in the order in which Julia looks for them."
+manifest_names(v::VersionNumber = VERSION) =
+  ("JuliaManifest-v$(v.major).$(v.minor).toml", "Manifest-v$(v.major).$(v.minor).toml", "JuliaManifest.toml", "Manifest.toml")
+
+"The manifest of `env` that Julia uses: the first of `manifest_names()` that exists."
 function manifest_file(env)
-  for name in ("Manifest-v$(VERSION.major).$(VERSION.minor).toml", "Manifest.toml")
+  for name in manifest_names()
     isfile(joinpath(env, name)) && return joinpath(env, name)
   end
   error("no manifest in $env")
@@ -169,7 +173,8 @@ end
     write_test_project(env)
 
 Create `env` with a fresh Project.toml that lists the package, its dependencies and the packages
-of its test target, with the package's `[compat]` bounds, and no manifest. The package's own
+of its test target, with the package's `[compat]` bounds, and none of the manifests (or the
+JuliaProject.toml) that Julia would use in `env`. The package's own
 Project.toml is not changed.
 """
 function write_test_project(env)
@@ -182,8 +187,8 @@ function write_test_project(env)
   deps[project["name"]] = project["uuid"]
   compat = Dict(name => bound for (name, bound) in get(project, "compat", Dict()) if name == "julia" || haskey(deps, name))
   mkpath(env)
-  for file in readdir(env; join = true)
-    startswith(basename(file), "Manifest") && rm(file)
+  for name in (manifest_names()..., "JuliaProject.toml")
+    rm(joinpath(env, name); force = true)
   end
   open(io -> TOML.print(io, Dict("deps" => deps, "compat" => compat)), joinpath(env, "Project.toml"), "w")
   return env
@@ -278,6 +283,23 @@ function verify_loaded(expected = expectations(); env = dirname(Base.active_proj
     push!(lines, "$name $version at $head ($dir)")
   end
   return lines
+end
+
+"""
+    verify_environment(env, revs, paths) -> manifest
+
+Export the run's revisions and checkouts as the environment variables that `expectations()` reads
+(child processes inherit them), check the manifest of `env`, and run `verify_loaded` in a Julia
+process that uses `env`. Returns the manifest path.
+"""
+function verify_environment(env, revs, paths)
+  for name in PACKAGES
+    ENV[rev_var(name)] = revs[name]
+    ENV[checkout_var(name)] = paths[name]
+  end
+  manifest = verify_manifest(env, paths)
+  run(`$(Base.julia_cmd()) --startup-file=no --project=$env $(@__FILE__)`)
+  return manifest
 end
 
 # ---- the receipt --------------------------------------------------------------------------

@@ -116,6 +116,31 @@ message(f) = try f(); nothing catch err sprint(showerror, err) end
     end
   end
 
+  @testset "manifest names" begin
+    # The names, in Julia's own order for the running version.
+    @test D.manifest_names() == Base.manifest_names
+    v = "v$(VERSION.major).$(VERSION.minor)"
+    @test D.manifest_names() == ("JuliaManifest-$v.toml", "Manifest-$v.toml", "JuliaManifest.toml", "Manifest.toml")
+    mktempdir() do dir
+      project = joinpath(dir, "Project.toml")
+      write(project, "")
+      julia_chooses() = basename(Base.project_file_manifest_path(project))
+      for names in (["JuliaManifest.toml"], ["Manifest.toml", "JuliaManifest.toml"],
+                    ["Manifest.toml", "Manifest-$v.toml", "JuliaManifest.toml"], [D.manifest_names()...])
+        foreach(n -> rm(joinpath(dir, n); force = true), D.manifest_names())
+        foreach(n -> write(joinpath(dir, n), ""), names)
+        # The file the helper reads is the one Pkg and the test process use.
+        @test basename(D.manifest_file(dir)) == julia_chooses()
+      end
+      # A fresh test project removes the manifests of the running Julia version, and a JuliaProject.toml.
+      write(joinpath(dir, "JuliaProject.toml"), "")
+      D.write_test_project(dir)
+      @test !any(n -> isfile(joinpath(dir, n)), D.manifest_names())
+      @test !isfile(joinpath(dir, "JuliaProject.toml")) && isfile(project)
+      @test occursin("no manifest", message(() -> D.manifest_file(dir)))
+    end
+  end
+
   @testset "expectations and the receipt" begin
     sha = "0123456789abcdef0123456789abcdef01234567"
     names = [D.rev_var.(D.PACKAGES); D.checkout_var.(D.PACKAGES)]

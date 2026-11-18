@@ -9,6 +9,7 @@
 /docs/build/
 .vscode/
 /docs/Manifest*.toml
+/docs/receipt.toml
 
 # Checkouts of ProximalBase and ProximalSolvers and the test environments built from them
 # (scripts/dependencies.jl; HDM_DEPS_DIR moves them)
