@@ -184,7 +184,7 @@ level(λ, n) = sqrt(Float64(n)) * Float64(λ)
 # [2⁻⁴⁰, 2⁴⁰]; λ in [2⁻²⁰, 2²⁰]. Post-check on the fit: θⱼ ≠ 0 exactly where β̂ⱼ ≠ 0, and every nonzero θⱼ and β̂ⱼ of
 # magnitude in [2⁻²⁰⁰, 2²⁰⁰] (the solution can be small or large, so this part depends on the fit).
 #
-# The argument is a crude margin argument: every nonzero rounded quantity of the derivation is bounded below by a
+# The argument is a crude margin argument: each nonzero rounded quantity in the list below is bounded below by a
 # power of two far above floatmin(Float64) = 2⁻¹⁰²² (the lowest bound below is 2⁻⁴⁸⁶, more than 500 binades
 # above), and above by 2²⁵⁰ (far below floatmax = 2¹⁰²⁴), so that each rounding error is relative. The bounds,
 # each derived from the input domain, with cancellation included:
