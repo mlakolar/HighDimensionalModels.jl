@@ -368,11 +368,182 @@ if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTI
       spec.meta.group == "controls" ? (@test cert.value > spec.meta.target) : (@test cert.value ≤ spec.meta.target)
     end
     # a reproducible run: equal coefficients (and intercepts) from two fresh copies of the prepared inputs
-    @test sort([c.meta.id for c in build_catalog("quick", ["lasso"])]) == ["lasso/lasso/dense", "lasso/lasso/dense-standardized"]
+    @test sort([c.meta.id for c in build_catalog("quick", ["lasso"])]) == ["lasso/lasso/dense", "lasso/lasso/dense-standardized", "lasso/sqrt_lasso/dense-standardized"]
     for spec in build_catalog("quick", ["lasso"])
       prepared = spec.build(scenario(spec.meta.scenario, 1))
       a, b = spec.call(deepcopy(prepared)), spec.call(deepcopy(prepared))
       @test coef(a) == coef(b)
     end
+  end
+end
+
+# ---- square-root lasso (#223) ----
+
+const SQRT_TARGET = 1e-4   # the target of the square-root case (SQRT_LASSO_TARGET of cases.jl)
+
+# a square-root lasso with an intercept and column scales whose solution (β₀, β) is known by construction. With
+# Z the centred and scaled columns of the certificate and Λ = √n λ, a unit vector u with 1ᵀu = 0, Zᵀu = Λ v
+# (v = sign β on the support, strictly inside (-1, 1) off it) is built from the least-norm solution of Zᵀu = Λ v
+# and a vector orthogonal to the columns of Z and to 1; with y = β₀ + Xβ + ρu the residual of (β₀, β) is ρu, and
+# the optimality conditions of ‖y - β₀1 - Xb‖/√n + λΣ sⱼ|bⱼ| hold in β₀ and β up to rounding.
+function designed_sqrt_standardized(rng; n = 60, p = 8, λ = 0.1, β₀ = 1.5, ρ = sqrt(60) / 2)
+  X = randn(rng, n, p) .* transpose(0.5 .+ 2 .* rand(rng, p)) .+ transpose(3 .* randn(rng, p))
+  Z, s = centered_scaled(X)
+  β = sparse_vector(rng, p, 3)
+  Λ = sqrt(n) * λ
+  u0 = dual_with(Z, Λ .* l1_subgradient(rng, β, 1.0))
+  M = [Z ones(n)]
+  w = randn(rng, n)
+  w .-= M * (M \ w)
+  norm(u0) < 1 || error("the designed dual vector is not shorter than 1")
+  u = u0 .+ sqrt(1 - dot(u0, u0)) .* w ./ norm(w)
+  y = β₀ .+ X * β .+ ρ .* u
+  (; X, y, β, β₀, λ, u, Z, s, ρ, n)
+end
+
+@testset "Square-root lasso certificate with an intercept" begin
+  rng = scenario_rng("certificate-controls-sqrt-standardized", 1)
+  d = designed_sqrt_standardized(rng)
+  n = d.n
+  @test all(>(0), d.s) && maximum(abs, sum(d.Z; dims = 1)) < 1e-12 && abs(norm(d.u) - 1) < 1e-12 && abs(sum(d.u)) < 1e-12
+  # the designed point is optimal: the gap and the dual point
+  c = sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, d.λ; target = SQRT_TARGET)
+  @test ok(c) && c.measure === :relative_gap && c.value ≤ TIGHT
+  a = sqrt_lasso_standardized_parts(d.X, d.y, d.β₀, d.β, d.λ)
+  @test a.u ≈ d.u atol = 1e-12
+  # the primal value is the normalized objective in the original coordinates, and D is P at the optimum
+  r = d.y .- d.β₀ .- d.X * d.β
+  @test a.P ≈ norm(r) / sqrt(n) + d.λ * dot(d.s, abs.(d.β)) rtol = 1e-12
+  @test a.D ≈ a.P rtol = 1e-11
+  @test a.feasibility <= 1 && a.width < 1e-60
+  # a perturbed intercept raises the primal value to √(ρ² + nδ²)/√n + the penalty and misses the target
+  for δ in (0.05, -0.05, 0.1)
+    p = sqrt_lasso_standardized_parts(d.X, d.y, d.β₀ + δ, d.β, d.λ)
+    @test p.P ≈ sqrt(d.ρ^2 + n * δ^2) / sqrt(n) + d.λ * dot(d.s, abs.(d.β)) rtol = 1e-12
+    @test p.D ≈ a.D rtol = 1e-11
+    @test sqrt_lasso_gap_standardized(d.X, d.y, d.β₀ + δ, d.β, d.λ; target = SQRT_TARGET).value > SQRT_TARGET
+  end
+  # perturbed coefficients with the designed intercept miss it too
+  for scale in (0.5, 1.5)
+    @test sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, scale .* d.β, d.λ; target = SQRT_TARGET).value > SQRT_TARGET
+  end
+  # weak duality and dual feasibility at random points: the bounds are below the known optimum, the dual
+  # point satisfies |zⱼᵀu| ≤ √n λ for the centred and scaled columns, and the verdict is not uncertifiable
+  for _ in 1:5
+    β = d.β .+ 0.3 .* randn(rng, length(d.β))
+    β₀ = d.β₀ + 0.3 * randn(rng)
+    p = sqrt_lasso_standardized_parts(d.X, d.y, β₀, β, d.λ)
+    @test ok(sqrt_lasso_gap_standardized(d.X, d.y, β₀, β, d.λ; target = SQRT_TARGET))
+    @test all(abs.(transpose(d.Z) * p.u) .<= sqrt(n) * d.λ * (1 + 1e-12)) && norm(p.u) <= 1 + 1e-12 && abs(sum(p.u)) < 1e-12
+    @test p.feasibility <= 1
+    @test p.D ≤ p.P && p.D ≤ a.P + 1e-13
+  end
+  # a constant column has scale 0 and is ignored by the penalty
+  Xc = [d.X fill(2.0, n)]
+  @test sqrt_lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.0], d.λ; target = SQRT_TARGET).value ≤ TIGHT
+  @test ok(sqrt_lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.5], d.λ; target = SQRT_TARGET))
+  # at λ ≥ λmax = maxⱼ |zⱼ'ỹ|/(√n‖ỹ‖) the solution is β = 0, β₀ = ȳ
+  ỹ = d.y .- mean_of(d.y)
+  λmax = maximum(abs.(transpose(d.Z) * ỹ)) / (sqrt(n) * norm(ỹ))
+  @test sqrt_lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), λmax; target = SQRT_TARGET).value ≤ TIGHT
+  @test sqrt_lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), 2λmax; target = SQRT_TARGET).value ≤ TIGHT
+  @test sqrt_lasso_gap_standardized(d.X, d.y, mean_of(d.y), zeros(8), 0.9λmax; target = SQRT_TARGET).value > 1e-3
+  # the zero residual of an exact fit is uncertifiable: the dual direction is undefined. The data are dyadic,
+  # y = 5 + x/2 with the exact means of x = (1, 2, 3, 6), and the stored point is (5, 1/2)
+  Xe, ye = reshape([1.0, 2.0, 3.0, 6.0], 4, 1), 5 .+ [1.0, 2.0, 3.0, 6.0] ./ 2
+  c = sqrt_lasso_gap_standardized(Xe, ye, 5.0, [0.5], 0.5; target = SQRT_TARGET)
+  @test bad(c) && occursin("residual", c.note)
+  @test sqrt_lasso_standardized_parts(Xe, ye, 5.0, [0.5], 0.5) isa String
+  # a residual that is a nonzero constant has the centred residual 0: the dual direction is undefined too
+  c = sqrt_lasso_gap_standardized(Xe, ye, 6.0, [0.5], 0.5; target = SQRT_TARGET)
+  @test bad(c) && occursin("centred residual", c.note)
+  # and the same point with the intercept moved to the optimum of that one-column problem is certifiable
+  @test ok(sqrt_lasso_gap_standardized(Xe, ye .+ [0.1, -0.1, 0.1, -0.1], 5.0, [0.5], 0.5; target = SQRT_TARGET))
+  # the value is an upper bound of the true relative gap (P - P*)/P of small problems solved in 512-bit
+  # arithmetic, and it is the value of its definition, evaluated there. For x = (-1, 1, -1, 1),
+  # y = (0.2, 2.8, 1.1, 1.9), n = 4 and the stored λ, the centred data have ȳ = 1.5, ỹ = (-1.3, 1.3, -0.4, 0.4),
+  # s = 1 and ‖ỹ - bx‖² = 4b² - 6.8b + 3.7, so that P(b) = √(4b² - 6.8b + 3.7)/2 + λ|b| and, for b > 0, P' = 0 gives
+  # (3.4 - 4b)² = 4λ²(4b² - 6.8b + 3.7), a quadratic in b whose smaller root is the minimizer. At b with the
+  # residual r = ỹ - bx, N = ‖r‖, g = |xᵀr|/N and t = min(1, 2λ/g) (Λ = √n λ = 2λ), the dual point is t r/N and
+  # D = t rᵀy/(2N); the value of the certificate is (P - D)/P. This point is first-order in |b - b*| from the
+  # optimum on both sides (t < 1 below b*, and D = N/2 + b xᵀr/(2N) above it), so the value is compared with
+  # the evaluation of its definition and not with the true gap, which is of second order.
+  Xq, yq = reshape([-1.0, 1.0, -1.0, 1.0], 4, 1), [0.2, 2.8, 1.1, 1.9]
+  λq = 0.1
+  setprecision(BigFloat, 512) do
+    λb = BigFloat(λq)
+    q = 1 - λb^2
+    bstar = (BigFloat(272) / 10 * q - sqrt((BigFloat(272) / 10 * q)^2 - 4 * 16 * q * (BigFloat(1156) / 100 - BigFloat(148) / 10 * λb^2))) / (32 * q)
+    N2(b) = 4b^2 - BigFloat(68) / 10 * b + BigFloat(37) / 10
+    Pq(b) = sqrt(N2(b)) / 2 + λb * abs(b)
+    Pstar = Pq(bstar)
+    @test abs((BigFloat(34) / 10 - 4bstar) / (2 * λb) - sqrt(N2(bstar))) < 1e-100       # the first-order condition
+    function definition(b)
+      yb, xb = BigFloat.(yq), BigFloat.(vec(Xq))
+      r = (yb .- BigFloat(3) / 2) .- b .* xb         # the stored point has β₀ = 1.5, and the y above are Float64 numbers
+      rc = r .- sum(r) / 4                           # whose mean is 1.5 only to rounding: the residual is centred
+      N = sqrt(sum(abs2, rc))
+      g = abs(sum(xb .* rc)) / N                     # the mean of x is exactly 0
+      t = min(one(BigFloat), 2 * λb / g)
+      D = t * sum(rc .* yb) / (2N)
+      P = sqrt(sum(abs2, r)) / 2 + λb * abs(b)
+      (P - D) / P
+    end
+    for b in (0.8, 0.85, 0.7, 0.2)
+      bb = BigFloat(b)
+      exact = (Pq(bb) - Pstar) / Pq(bb)
+      value = definition(bb)
+      cq = sqrt_lasso_gap_standardized(Xq, yq, 1.5, [b], λq; target = SQRT_TARGET)
+      @test ok(cq)
+      @test exact <= value                                                  # an upper bound of the true gap
+      @test value <= BigFloat(cq.value) <= value * (1 + 4 * eps()) + BigFloat(10)^-60   # the certificate's value is that of the definition, rounded up
+    end
+    # the minimizer itself
+    cq = sqrt_lasso_gap_standardized(Xq, yq, 1.5, [Float64(bstar)], λq; target = SQRT_TARGET)
+    @test ok(cq) && cq.value <= 1e-14
+  end
+  # the target: a gap between the bounds is uncertifiable, one clearly below or above is ok
+  @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, d.λ; target = NaN))
+  @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, d.λ; target = 0.0))
+  aq = sqrt_lasso_standardized_parts(Xq, yq, 1.5, [0.8], λq)
+  @test aq.gap_lo < aq.gap
+  @test bad(sqrt_lasso_gap_standardized(Xq, yq, 1.5, [0.8], λq; target = aq.gap_lo))               # gap_lo ≤ target < gap
+  @test occursin("could change the verdict", sqrt_lasso_gap_standardized(Xq, yq, 1.5, [0.8], λq; target = aq.gap_lo).note)
+  @test ok(sqrt_lasso_gap_standardized(Xq, yq, 1.5, [0.8], λq; target = 2aq.gap))
+  # invalid and nonfinite inputs are uncertifiable
+  for v in (NaN, Inf)
+    @test bad(sqrt_lasso_gap_standardized(d.X, d.y, v, d.β, d.λ; target = SQRT_TARGET))
+    @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, [v; d.β[2:end]], d.λ; target = SQRT_TARGET))
+    @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, v; target = SQRT_TARGET))
+  end
+  @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, 0.0; target = SQRT_TARGET))
+  @test bad(sqrt_lasso_gap_standardized(d.X, d.y, d.β₀, d.β, -0.1; target = SQRT_TARGET))
+  @test bad(sqrt_lasso_gap_standardized(d.X, d.y[1:end-1], d.β₀, d.β, d.λ; target = SQRT_TARGET))
+  # element types are converted
+  X32, y32, β32 = Float32.(d.X), Float32.(d.y), Float32.(d.β)
+  @test sqrt_lasso_gap_standardized(X32, y32, 1.5f0, β32, Float32(d.λ); target = SQRT_TARGET).value ==
+        sqrt_lasso_gap_standardized(Float64.(X32), Float64.(y32), 1.5, Float64.(β32), Float64(Float32(d.λ)); target = SQRT_TARGET).value
+end
+
+if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTIFICATES_PACKAGE", "1") != "0"
+  # secondary: a tight `sqrt_lasso` fit against its certificate, and its case against the target
+  @testset "Secondary agreement of sqrt_lasso with its certificate" begin
+    for (key, ratio) in (("ls-200x50", 0.3), ("ls-wide-100x400", 0.5))
+      a = scenario(key, 1)
+      Z, r = standardized(a.X, a.y)
+      λ = ratio * sqrt_lambda_max(Z, r)
+      fit = sqrt_lasso(a.X, a.y, λ, CDSolver(; order = :cyclic, momentum = false, tol = 1e-12); intercept = true, standardize_x = true)
+      c = sqrt_lasso_gap_standardized(a.X, a.y, fit.intercept, fit.coefficients, λ; target = SQRT_TARGET)
+      @test ok(c) && c.value ≤ 1e-9
+    end
+    spec = only(c for c in build_catalog("quick", ["lasso"]) if c.meta.id == "lasso/sqrt_lasso/dense-standardized")
+    @test spec.meta.target == SQRT_TARGET == SQRT_LASSO_TARGET && spec.meta.measure == "relative_gap"
+    problem = scenario(spec.meta.scenario, 1)
+    prepared = spec.build(problem)
+    out = spec.call(deepcopy(prepared))
+    cert = spec.certify(problem, prepared, out)
+    @test ok(cert) && string(cert.measure) == spec.meta.measure && cert.value ≤ spec.meta.target
+    @test out isa SqrtLassoSolution && out.result.converged && coef(out) == coef(spec.call(deepcopy(prepared)))
+    println("sqrt_lasso/dense-standardized: certificate value ", cert.value, " (target ", spec.meta.target, "), solver gap ", out.result.gap)
   end
 end

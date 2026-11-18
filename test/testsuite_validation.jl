@@ -115,7 +115,7 @@ end
 @testset "this repository's inventory" begin
   inv = TS.load(joinpath(@__DIR__, "testsuite.toml"))
   @test TS.check(inv, TS.discover(@__DIR__)) === nothing
-  @test TS.alltests(inv) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_intercept", "lasso_reference", "smoke", "statsapi", "testsuite_validation"]
+  @test TS.alltests(inv) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_intercept", "lasso_reference", "smoke", "sqrt_lasso", "statsapi", "testsuite_validation"]
   @test isempty(inv.serial) && isempty(inv.subprocess)
   # Helpers and fixtures are named one by one, with a reason.
   @test Set(keys(inv.not_tests)) == Set(["testsuite"])
