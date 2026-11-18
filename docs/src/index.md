@@ -9,7 +9,7 @@ HighDimensionalModels has one estimator, the Gaussian lasso at a single penalty 
 It is a thin layer. [ProximalBase.jl](https://github.com/mlakolar/ProximalBase.jl) owns the
 mathematics (the loss, the penalty and their numerical contracts) and
 [ProximalSolvers.jl](https://github.com/mlakolar/ProximalSolvers.jl) owns the solver
-(coordinate descent, its stopping rule and its checks of the arguments). This package forms the
+(coordinate descent and its stopping rule). Both check their arguments. This package forms the
 problem, calls the solver and returns the coefficients, the residuals and the solver's result.
 
 ```@example index

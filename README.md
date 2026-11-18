@@ -13,7 +13,7 @@ minimize over β:   ‖y - Xβ‖² / (2n) + λ ‖β‖₁ ,      n = size(X, 1
 It is a thin layer. [ProximalBase.jl](https://github.com/mlakolar/ProximalBase.jl) owns the
 mathematics (the loss and the penalty) and
 [ProximalSolvers.jl](https://github.com/mlakolar/ProximalSolvers.jl) owns the solver
-(coordinate descent, its stopping rule and its checks of the arguments). This package forms
+(coordinate descent and its stopping rule). Both check their arguments. This package forms
 the problem, calls the solver and returns the coefficients, the residuals and the solver's result.
 It contains no optimization code.
 
@@ -44,23 +44,26 @@ residuals(fit), nobs(fit)             # y - X * coef(fit), and n
 fit.result                            # the ProximalSolvers result (CDResults)
 ```
 
-`CDSolver()` without arguments visits the coordinates in random order and advances the default
-random number generator of the task; `CDSolver(order = :cyclic, momentum = false)` is deterministic.
+`CDSolver()` without arguments visits the coordinates in random order, drawn from the default
+random number generator of the task, which advances when the ordering draws from it; two such
+calls need not return identical coefficients. `CDSolver(order = :cyclic, momentum = false)`
+visits them in a fixed order.
 (The printed values are from Julia 1.10; the last digits can differ between Julia versions.)
 
 `fit.result.converged` is the solver's test of the change of the coefficients in a pass. For this
 problem it is not an optimality certificate. To check a fit, compare `X' * residuals(fit) / n`
-with `λ`: at a minimizer its entries are at most `λ` in absolute value, and equal `λ * sign(βⱼ)`
-where `βⱼ ≠ 0`. The [documentation](https://mlakolar.github.io/HighDimensionalModels.jl/dev/lasso/)
-has the details.
+with `λ`: at a minimizer its entries are at most `λ` in absolute value, and the entries with
+`βⱼ ≠ 0` equal `λ * sign(βⱼ)`. How close a run gets depends on the tolerance, the pass limit, the
+conditioning and the rounding of the working type, so the deviations have to be measured. The
+[documentation](https://mlakolar.github.io/HighDimensionalModels.jl/dev/lasso/) has the details.
 
 ## Supported inputs
 
 `lasso(X, y, λ, solver = CDSolver())` takes `X::Matrix{T}` and `y::Vector{T}` with `T` equal to
 `Float32` or `Float64`, a real `λ` that is finite, nonnegative and representable in `T`, and an
 optional `CDSolver` from ProximalSolvers (re-exported). Other argument types throw an
-`ArgumentError`; nothing is converted. The other checks are ProximalSolvers' and its errors are
-passed on.
+`ArgumentError`; nothing is converted. The other checks are those of ProximalBase and
+ProximalSolvers, and their errors are passed on.
 
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
 cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and

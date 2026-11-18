@@ -32,8 +32,9 @@ types throw an `ArgumentError`, and nothing is converted. `X` and `y` are not mo
 and the solution keeps no reference to them.
 
 `n ≥ 1` is checked here. The other checks (matching dimensions, `p ≥ 1`, finite data,
-`λ` finite, nonnegative and representable in `T`) are those of ProximalSolvers, and
-its errors are not altered. `λ` reaches the penalty as given, in its own type.
+`λ` finite, nonnegative and representable in `T`) are those of ProximalBase and
+ProximalSolvers, and their errors are not altered. `λ` reaches the penalty as given,
+in its own type.
 
 The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is
 `NormL1(λ)`; the solve is `ProximalSolvers.solve!`.
@@ -42,13 +43,18 @@ The convergence report is ProximalSolvers' (`fit.result.converged`, `passes`,
 `maxchange`, `tolerance`, `minimum`). For this problem `converged` reports the
 coefficient-change test of the solver (the largest change of a coefficient in a full
 pass, in the solver's scaling of the changes, against `tolerance`), not a bound on the
-distance to the minimum or on the KKT conditions. To check a fit, compute `maximum(abs, X' * residuals(fit)) / n` against `λ`
-and, on the support, `X[:, j]' * residuals(fit) / n` against `λ * sign(β[j])`.
+distance to the minimum or on the KKT conditions. To check a fit, compute
+`maximum(abs, X' * residuals(fit)) / n` against `λ` and, on the support,
+`X[:, j]' * residuals(fit) / n` against `λ * sign(β[j])`. Rounding limits the accuracy that
+can be attained; the accuracy a run achieved depends also on `tol`, `maxpasses` and the
+conditioning of `X`, and has to be measured.
 
-With `CDSolver()` the coordinate order is random and the default random number
-generator of the task advances. `CDSolver(order = :cyclic, momentum = false)` gives a
-deterministic run. `CDSolver(maxpasses = 1)` stops after one pass with a warning and
-`converged == false`.
+With `CDSolver()` the coordinate order is random and is drawn from the solver's random
+number generator, by default the one of the task, which is borrowed and advances when the
+ordering draws from it (a design with one column needs no draw). `CDSolver(order = :cyclic,
+momentum = false)` gives a fixed coordinate order. `maxpasses` caps the passes; a run that
+reaches the cap without meeting the change test returns `converged == false` and
+ProximalSolvers warns.
 """
 function lasso(X::Matrix{T}, y::Vector{T}, λ::Real, solver::CDSolver = CDSolver()) where {T<:Union{Float32, Float64}}
   n = size(X, 1)
