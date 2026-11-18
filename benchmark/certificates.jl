@@ -176,8 +176,8 @@ end
 # `relative_gap` adds a rounding allowance and a clamp in Float64, which would break this
 # argument). The certificate is uncertifiable when (eP + eD)/den_lo > 1e-8 (1% of the smallest
 # target, 1e-6), or P_hi < D_lo (the bounds contradict weak duality), or the dual point cannot be
-# shown feasible, or a scale is not a normal Float64, or ŝⱼ ≤ esⱼ. A reported value never
-# underestimates the true relative gap, so :ok is never false. A miss can be spurious only through
+# shown feasible, or a scale is not a normal Float64, or ŝⱼ ≤ esⱼ. Under the error model, a
+# reported value does not underestimate the true relative gap, so :ok is not false. A miss can be spurious only through
 # the excess of the value over the true gap, which is at most 2 (1 + gap) 1e-8 (num_hi ≤ num +
 # 2(eP + eD) and den_lo ≥ den - 2eP). The Float64 steps are: the exact conversion of the inputs,
 # the validation of the scales in `bad_scale`, and the conversion of P̂, D̂, θ̂, t for the report

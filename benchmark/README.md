@@ -164,8 +164,8 @@ relative gap. The certificate returns it with `ok` and does not pass through the
 `relative_gap`, whose rounding allowance and Float64 clamp would break this argument. It is
 `uncertifiable` when `(eP + eD)/den_lo > 1e-8` (1% of the smallest target, `1e-6`), when
 `P_hi < D_lo`, when the dual point cannot be shown feasible, or when a scale is not a normal Float64,
-is `0` for a column that is not constant, or is not above its error bound. A reported value therefore
-never underestimates the true relative gap, so an `ok` is not false, and a miss can be spurious only
+is `0` for a column that is not constant, or is not above its error bound. Under the error model, a
+reported value therefore does not underestimate the true relative gap, so an `ok` is not false, and a miss can be spurious only
 by a small amount in the value: it exceeds the true gap by at most `2(1 + gap)·1e-8` (from
 `num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`). The steps outside the BigFloat core are the exact input conversion, the
 validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the rounded-up
