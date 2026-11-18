@@ -163,9 +163,10 @@ end
       write_outputs(out, p(M("src/lasso.jl")))
       @test readlines(out) == ["level=full", "tests=all", "jobs=benchmark-integrity test", "coverage=true", "ok=true"]
       write(out, ""); write_outputs(out, p(M("README.md")))
-      @test readlines(out) == ["level=none", "tests=", "jobs=", "coverage=false", "ok=true"]
+      # An empty job or test list is written as `none`, so that a missing output differs from it.
+      @test readlines(out) == ["level=none", "tests=none", "jobs=none", "coverage=false", "ok=true"]
       write(out, ""); write_outputs(out, p(M("benchmark/run.jl")))
-      @test "jobs=benchmark-integrity" in readlines(out) && "tests=" in readlines(out)
+      @test "jobs=benchmark-integrity" in readlines(out) && "tests=none" in readlines(out)
       write(out, ""); write_outputs(out, full_plan("nightly"))
       @test "jobs=benchmark-integrity test test-cross" in readlines(out)
     end
@@ -175,50 +176,104 @@ end
   end
 
   @testset "the gate" begin
-    v = CIPlan.verdict
     jobs = CIPlan.JOBS
     allskipped = Dict(j => "skipped" for j in jobs)
     with(d...) = merge(allskipped, Dict(d...))
-    # Documentation only: nothing required, everything skipped.
-    @test v("success", "true", "", allskipped)[1]
-    # A full pull-request plan: the required jobs passed, the cross-platform job was skipped.
+    # The verdict of a plan (level, tests, jobs; a full pull-request plan by default) and results.
+    v(results; result = "success", ok = "true", level = "full", tests = "all", jobs = "benchmark-integrity test", kw...) =
+      CIPlan.verdict(result, ok, level, tests, jobs, results; kw...)
+    docs = (level = "none", tests = "none", jobs = "none")
     full = with("test" => "success", "benchmark-integrity" => "success")
-    @test v("success", "true", "benchmark-integrity test", full)[1]
-    # The nightly plan requires every job.
     nightly = with("test" => "success", "test-cross" => "success", "benchmark-integrity" => "success")
-    @test v("success", "true", "benchmark-integrity test test-cross", nightly)[1]
-    @test !v("success", "true", "benchmark-integrity test test-cross", full)[1]    # test-cross skipped although required
+    # Documentation only: nothing required, everything skipped.
+    @test v(allskipped; docs...)[1]
+    # Benchmark files only: the benchmark job is required.
+    @test v(with("benchmark-integrity" => "success"); level = "none", tests = "none", jobs = "benchmark-integrity")[1]
+    # A full pull-request plan: the required jobs passed, the cross-platform job was skipped.
+    @test v(full)[1]
+    # A focused plan, with a test selection.
+    @test v(with("test" => "success"); level = "focused", tests = "lasso,smoke", jobs = "test")[1]
+    # The nightly plan requires every job.
+    @test v(nightly; jobs = "benchmark-integrity test test-cross")[1]
+    @test !v(full; jobs = "benchmark-integrity test test-cross")[1]    # test-cross skipped although required
     # A required job that failed, was cancelled, skipped or is missing.
     for r in ("failure", "cancelled", "skipped", "")
-      @test !v("success", "true", "benchmark-integrity test", merge(full, Dict("test" => r)))[1]
-      @test !v("success", "true", "benchmark-integrity test", merge(full, Dict("benchmark-integrity" => r)))[1]
+      @test !v(merge(full, Dict("test" => r)))[1]
+      @test !v(merge(full, Dict("benchmark-integrity" => r)))[1]
     end
-    @test !v("success", "true", "test", delete!(with("test" => "success"), "benchmark-integrity"))[1]
+    @test !v(delete!(copy(full), "benchmark-integrity"))[1]
     # A job that was not required must have been skipped: one that ran, failed, was cancelled
     # or is missing fails the gate.
     for r in ("success", "failure", "cancelled", "")
-      @test !v("success", "true", "test", with("test" => "success", "test-cross" => r))[1]
+      @test !v(with("test" => "success", "test-cross" => r); level = "focused", tests = "lasso", jobs = "test")[1]
     end
-    @test !v("success", "true", "test", full)[1]                  # benchmark-integrity ran without being required
-    @test v("success", "true", "test", with("test" => "success"))[1]
+    @test !v(full; level = "focused", tests = "lasso", jobs = "test")[1]   # benchmark-integrity ran without being required
+    @test v(with("test" => "success"); level = "focused", tests = "lasso", jobs = "test")[1]
     # A failed, cancelled or incomplete plan fails even if nothing else ran.
     for (result, ok) in (("failure", ""), ("cancelled", ""), ("skipped", ""), ("", ""), ("success", ""), ("success", "false"))
-      @test !v(result, ok, "", allskipped)[1]
+      @test !v(allskipped; result, ok, docs...)[1]
     end
-    # A plan naming an unknown job, and results from an unknown job.
-    @test !v("success", "true", "test deploy", with("test" => "success"))[1]
-    @test !v("success", "true", "test", with("test" => "success", "deploy" => "skipped"))[1]
-    passed, lines = v("success", "true", "test", with("test" => "failure"))
+    # A plan naming an unknown job, repeating a job, or mixing the `none` sentinel with jobs.
+    @test !v(with("test" => "success"); jobs = "test deploy")[1]
+    @test !v(with("test" => "success"); jobs = "test test")[1]
+    @test !v(allskipped; level = "none", tests = "none", jobs = "none test")[1]
+    @test !v(with("test" => "success", "deploy" => "skipped"); jobs = "test", level = "focused", tests = "lasso")[1]   # results of an unknown job
+    passed, lines = v(with("test" => "failure"); level = "focused", tests = "lasso", jobs = "test")
     @test !passed && any(l -> occursin("test is required, but its result is `failure`", l), lines)
-    # The RESULTS words of the environment, as the workflow writes them.
-    gate(results; jobs = "test") = withenv("PLAN_RESULT" => "success", "PLAN_OK" => "true", "PLAN_JOBS" => jobs,
-                                           "RESULTS" => results, "GITHUB_STEP_SUMMARY" => nothing) do
-      redirect_stdout(() -> CIPlan.gate(), devnull)
+    # Missing or empty plan outputs are not an empty plan (the documentation-only plan says `none`).
+    for (level, tests, jobs) in (("", "none", "none"), ("none", "", "none"), ("none", "none", ""), ("", "", ""))
+      passed, lines = v(allskipped; level, tests, jobs)
+      @test !passed && any(l -> occursin("missing or empty", l), lines)
     end
-    @test gate("test=success test-cross=skipped benchmark-integrity=skipped")
+    @test !v(allskipped; level = "sometimes", tests = "none", jobs = "none")[1]
+    # Contradictions between level, test selection and jobs, each rejected.
+    @test !v(allskipped; level = "full", tests = "all", jobs = "none")[1]              # full without the test job
+    @test !v(allskipped; level = "focused", tests = "lasso", jobs = "benchmark-integrity")[1]
+    @test !v(full; level = "none", tests = "none", jobs = "benchmark-integrity test")[1]   # none with the test job
+    @test !v(full; level = "none", tests = "all", jobs = "benchmark-integrity test")[1]    # none with tests
+    @test !v(allskipped; level = "none", tests = "all", jobs = "none")[1]              # tests without the test job
+    @test !v(full; level = "full", tests = "none", jobs = "benchmark-integrity test")[1]   # the test job without tests
+    @test !v(with("test-cross" => "success"); level = "none", tests = "none", jobs = "test-cross")[1]
+    @test !v(with("test-cross" => "success"); level = "full", tests = "all", jobs = "test-cross")[1]
+    passed, lines = v(full; level = "none", tests = "none", jobs = "benchmark-integrity test")
+    @test any(l -> occursin("a `none` plan has tests or the `test` job", l), lines)
+    # Results: duplicates, malformed words, unknown results.
+    res, problems = CIPlan.parse_results("test=success test-cross=skipped benchmark-integrity=skipped")
+    @test isempty(problems) && res == Dict("test" => "success", "test-cross" => "skipped", "benchmark-integrity" => "skipped")
+    for text in ("test=failure test=success", "test=success test=success", "test", "test=", "=success", "test=success=failure",
+                 "test=weird", "test==success")
+      res, problems = CIPlan.parse_results(text)
+      @test !isempty(problems)
+      @test !v(merge(full, res); problems)[1]
+    end
+    @test occursin("given twice", only(CIPlan.parse_results("test=failure test=success")[2]))
+    # The gate job reads the plan and the results from the environment, as the workflow writes them.
+    function gate(results; level = "focused", tests = "lasso", jobs = "test", plan = "success", ok = "true")
+      vars = ["PLAN_RESULT" => plan, "PLAN_OK" => ok, "PLAN_LEVEL" => level, "PLAN_TESTS" => tests, "PLAN_JOBS" => jobs,
+              "RESULTS" => results, "GITHUB_STEP_SUMMARY" => nothing]
+      withenv(vars...) do
+        redirect_stdout(() -> CIPlan.gate(), devnull)
+      end
+    end
+    ok = "test=success test-cross=skipped benchmark-integrity=skipped"
+    @test gate(ok)
     @test !gate("test=failure test-cross=skipped benchmark-integrity=skipped")
     @test !gate("test=skipped test-cross=skipped benchmark-integrity=skipped")
+    @test !gate("test=failure test=success test-cross=skipped benchmark-integrity=skipped")   # a duplicate does not overwrite
+    @test !gate("test=success test-cross=skipped")                                           # a job is missing
     @test !gate("")                                              # no results at all
+    @test gate("test=skipped test-cross=skipped benchmark-integrity=skipped"; level = "none", tests = "none", jobs = "none")
+    @test !gate(ok; jobs = "")                                   # an empty job list is not the documentation plan
+    @test !gate("test=skipped test-cross=skipped benchmark-integrity=skipped"; level = "none", tests = "none", jobs = "")
+    # An output that is not set at all is read as empty.
+    for var in ("PLAN_LEVEL", "PLAN_TESTS", "PLAN_JOBS")
+      vars = ["PLAN_RESULT" => "success", "PLAN_OK" => "true", "PLAN_LEVEL" => "none", "PLAN_TESTS" => "none",
+              "PLAN_JOBS" => "none", "RESULTS" => "test=skipped test-cross=skipped benchmark-integrity=skipped",
+              "GITHUB_STEP_SUMMARY" => nothing]
+      withenv(vars..., var => nothing) do
+        @test !redirect_stdout(() -> CIPlan.gate(), devnull)
+      end
+    end
     # Every job the workflow defines is a known job, the gate needs all of them, and the
     # workflow keeps the properties the gate relies on.
     workflow = joinpath(ROOT, ".github", "workflows", "CI.yml")
@@ -229,6 +284,11 @@ end
       for j in jobs
         @test occursin("\n  $j:\n", text)
         @test occursin("$j=\${{ needs.$j.result }}", text) || occursin("$j=\${{ needs['$j'].result }}", text)
+      end
+      for (var, output) in ("PLAN_RESULT" => "needs.plan.result", "PLAN_OK" => "needs.plan.outputs.ok",
+                            "PLAN_LEVEL" => "needs.plan.outputs.level", "PLAN_TESTS" => "needs.plan.outputs.tests",
+                            "PLAN_JOBS" => "needs.plan.outputs.jobs")
+        @test occursin("$var: \${{ $output }}", text)             # the gate reads the whole plan
       end
       @test !occursin("continue-on-error", text)                   # no test step may fail silently
       @test !occursin("tags:", text)

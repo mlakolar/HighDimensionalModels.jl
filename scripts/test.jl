@@ -26,20 +26,14 @@ end
 
 function main(args)
   revs, paths = Dependencies.prepare()
-  # One pair of commits for the whole run, also for the child processes.
-  for name in Dependencies.PACKAGES
-    ENV[Dependencies.rev_var(name)] = revs[name]
-    ENV[Dependencies.checkout_var(name)] = paths[name]
-  end
   env = joinpath(Dependencies.deps_dir(), "test-env", "v$(VERSION.major).$(VERSION.minor)")
   project = joinpath(Dependencies.ROOT, "Project.toml")
   original = read(project)
   Dependencies.write_test_project(env)
   Dependencies.develop(env, paths)
   read(project) == original || error("the test setup changed Project.toml of the package")
-  manifest = Dependencies.verify_manifest(env, paths)
-  # The loaded packages, checked in a process of the environment (also by test/dependencies.jl).
-  run(`$(Base.julia_cmd()) --startup-file=no --project=$env $(joinpath(@__DIR__, "dependencies.jl"))`)
+  # The manifest, and the loaded packages in a process of the environment (also test/dependencies.jl).
+  manifest = Dependencies.verify_environment(env, revs, paths)
   receipt = Dependencies.write_receipt(env, revs, paths, manifest)
   println("\nReceipt ($receipt):\n", read(receipt, String))
   Dependencies.summary(["### Dependencies", "",

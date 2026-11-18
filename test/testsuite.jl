@@ -121,32 +121,16 @@ or a name that is not a test is an error, so a typo cannot select nothing and pa
 """
 function select_only!(suite::AbstractDict, value::Union{Nothing,AbstractString})
   names = value === nothing ? String[] : filter!(!isempty, strip.(split(value, ',')))
-  isempty(names) && error("--only needs test names, for example --only=lasso,cv")
+  isempty(names) && error("--only needs test names, for example --only=lasso,smoke")
   unknown = filter(name -> !haskey(suite, name), names)
   isempty(unknown) || error("--only: no test file $(join(unknown, ", ")); `--list` shows the names")
   filter!(((name, _),) -> name in names, suite)
   return suite
 end
 
-"The Julia threads of each worker: `HDM_TEST_THREADS`, default 2."
-function worker_threads(value::AbstractString = get(ENV, "HDM_TEST_THREADS", "2"))
-  threads = tryparse(Int, value)
-  threads !== nothing && threads >= 1 || error("HDM_TEST_THREADS must be a positive integer, got \"$value\"")
-  return threads
-end
-
 "The CPU threads this process may use: `Sys.EFFECTIVE_CPU_THREADS` (cgroup and affinity limits)
 where Julia has it, else `Sys.CPU_THREADS` (Julia 1.10)."
 cpu_threads() = @static isdefined(Sys, :EFFECTIVE_CPU_THREADS) ? Sys.EFFECTIVE_CPU_THREADS : Sys.CPU_THREADS
-
-"""
-    max_workers(threads, cpus = cpu_threads())
-
-The default worker count's upper bound: the CPU budget divided among workers of `threads`
-Julia threads each, at least one. ParallelTestRunner applies its memory bound on top, and
-`--jobs`/`PTR_NUM_JOBS` override both.
-"""
-max_workers(threads::Integer, cpus::Integer = cpu_threads()) = max(1, cpus ÷ threads)
 
 "The line of test/runtests.jl that lists the selected test files, followed by their names."
 const SELECTION_PREFIX = "Selected test files: "
@@ -156,7 +140,7 @@ const SELECTION_PREFIX = "Selected test files: "
 
 The test files that a run of test/runtests.jl selected, from its output `lines`. Throws unless
 the run printed its selection (one line starting with `SELECTION_PREFIX`), the selection is
-`expected` when given, and the runner's table of finished files has a row for every selected file.
+`expected` when given, and the runner's table has a completed row for every selected file.
 """
 function check_run(lines::AbstractVector{<:AbstractString}, expected::Union{Nothing,AbstractVector{<:AbstractString}} = nothing)
   chosen = [l for l in lines if startswith(l, SELECTION_PREFIX)]
@@ -165,14 +149,17 @@ function check_run(lines::AbstractVector{<:AbstractString}, expected::Union{Noth
   isempty(selected) && error("the runner selected no test file")
   expected === nothing || sort(selected) == sort(expected) ||
     error("the runner selected $(join(selected, " ")), expected $(join(sort(expected), " "))")
-  # The runner prints one row per finished file: `name (worker) │ time ...`.
+  # A finished file has a row `name (worker) │ n │ n │ ... │` of five to seven numeric columns
+  # (the number depends on `--verbose` and the Julia version). The runner also prints
+  # `name (worker) │ started at ...` when a file starts and `... failed at ...` when it fails, which
+  # are not completion; a file that crashed prints `crashed at` on stderr, which this does not read.
   reported = String[]
   for line in lines
-    m = match(r"^(\S+)\s+\(\d+\)\s+│", replace(line, r"\e\[[0-9;]*m" => ""))
+    m = match(r"^(\S+)\s+\(\d+\)\s+│(?:\s*\d+(?:\.\d+)?\s*│){5,}\s*$", replace(line, r"\e\[[0-9;]*m" => ""))
     m === nothing || push!(reported, m[1])
   end
   unreported = setdiff(selected, reported)
-  isempty(unreported) || error("selected but not reported by the runner: $(join(sort!(collect(unreported)), " "))")
+  isempty(unreported) || error("selected but without a completed row in the runner's output: $(join(sort!(collect(unreported)), " "))")
   return selected
 end
 

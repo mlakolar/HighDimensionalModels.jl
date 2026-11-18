@@ -305,11 +305,14 @@ function describe(io::IO, p::Plan; markdown::Bool = false)
   end
 end
 
+"The sentinel that stands for an empty job or test list in the outputs, so that a missing output differs from an empty one."
+const NONE = "none"
+
 function write_outputs(path, p::Plan)
   open(path, "a") do io
     println(io, "level=", p.level)
-    println(io, "tests=", p.tests === nothing ? "all" : join(p.tests, ","))
-    println(io, "jobs=", join(p.jobs, " "))
+    println(io, "tests=", p.tests === nothing ? "all" : isempty(p.tests) ? NONE : join(p.tests, ","))
+    println(io, "jobs=", isempty(p.jobs) ? NONE : join(p.jobs, " "))
     println(io, "coverage=", p.coverage)
     println(io, "ok=true")
   end
@@ -377,24 +380,84 @@ end
 
 # ---- gate ----------------------------------------------------------------------------------
 
+const RESULT_WORDS = ("success", "failure", "cancelled", "skipped")
+
 """
-    verdict(plan_result, plan_ok, plan_jobs, results) -> (passed, lines)
+    parse_results(text) -> (results, problems)
+
+The `job=result` words of the gate's RESULTS. A word that is not `job=result`, a result that is
+not one of `RESULT_WORDS`, and a job that appears twice are problems.
+"""
+function parse_results(text::AbstractString)
+  results = Dict{String,String}()
+  problems = String[]
+  for word in split(text)
+    m = match(r"^([^=]+)=([^=]+)$", word)
+    if m === nothing
+      push!(problems, "the result `$word` is not of the form job=result.")
+      continue
+    end
+    job, result = String(m[1]), String(m[2])
+    result in RESULT_WORDS || push!(problems, "the result of $job is `$result`, not one of $(join(RESULT_WORDS, ", ")).")
+    haskey(results, job) && push!(problems, "the result of $job is given twice.")
+    results[job] = result
+  end
+  return results, problems
+end
+
+"""
+    plan_problems(level, tests, jobs) -> (required, problems)
+
+The jobs a plan requires, from its outputs `level`, `tests` and `jobs` (as `write_outputs` writes
+them), and what is wrong with them: an empty or unknown value, a repeated or mixed-in job, or a
+contradiction between the three (the test selection and the `test` job go together, and a `none`
+plan has neither).
+"""
+function plan_problems(level::AbstractString, tests::AbstractString, jobs::AbstractString)
+  problems = String[]
+  isempty(level) ? push!(problems, "the plan's level is missing or empty.") :
+    level in LEVELS || push!(problems, "the plan level is `$level`, not one of $(join(LEVELS, ", ")).")
+  isempty(tests) && push!(problems, "the plan's test selection is missing or empty.")
+  words = split(jobs)
+  required = String[]
+  if isempty(words)
+    push!(problems, "the plan's job list is missing or empty; a plan without jobs says `$NONE`.")
+  elseif words != [NONE]
+    for j in words
+      j in JOBS || push!(problems, "the plan names an unknown job `$j`.")
+    end
+    allunique(words) || push!(problems, "the plan names a job twice.")
+    required = String.(words)
+  end
+  if isempty(problems)
+    hastest, hastests = "test" in required, tests != NONE
+    hastests == hastest || push!(problems, "the plan's test selection is `$tests` but its jobs are `$jobs`.")
+    level == "none" && (hastest || hastests) && push!(problems, "a `none` plan has tests or the `test` job.")
+    level != "none" && !hastest && push!(problems, "a `$level` plan lacks the `test` job.")
+    "test-cross" in required && !hastest && push!(problems, "the plan requires test-cross without the `test` job.")
+  end
+  return required, problems
+end
+
+"""
+    verdict(plan_result, plan_ok, plan_level, plan_tests, plan_jobs, results; problems = String[]) -> (passed, lines)
 
 The required check of a CI run. It passes only if the plan job succeeded and wrote its outputs,
-every job the plan required succeeded, and every other job was skipped: a job that ran without
-being required is a mismatch between the plan and the workflow.
-`results` maps each CI job to its `needs.<job>.result`; a job missing from it fails the check.
+the plan's outputs are well formed and consistent (`plan_problems`), every job the plan required
+succeeded, and every other job was skipped: a job that ran without being required is a mismatch
+between the plan and the workflow. `results` maps each CI job to its `needs.<job>.result`; a job
+missing from it fails the check, and so does any entry of `problems` (from `parse_results`).
 """
-function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_jobs::AbstractString,
-                 results::AbstractDict)
+function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_level::AbstractString,
+                 plan_tests::AbstractString, plan_jobs::AbstractString, results::AbstractDict;
+                 problems::AbstractVector{<:AbstractString} = String[])
   lines = String[]
   fail(msg) = push!(lines, "FAIL: " * msg)
   plan_result == "success" || fail("the plan job ended with `$(isempty(plan_result) ? "no result" : plan_result)`.")
   plan_ok == "true" || fail("the plan did not write a complete plan.")
-  required = split(plan_jobs)
-  for j in required
-    j in JOBS || fail("the plan names an unknown job `$j`.")
-  end
+  required, plan_issues = plan_problems(plan_level, plan_tests, plan_jobs)
+  foreach(fail, plan_issues)
+  foreach(fail, problems)
   for j in JOBS
     r = get(results, j, "")
     if j in required
@@ -411,14 +474,11 @@ function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_jobs
   return !any(l -> startswith(l, "FAIL"), lines), lines
 end
 
-"The gate job: reads PLAN_RESULT, PLAN_OK, PLAN_JOBS and RESULTS (`job=result` words) from ENV."
+"The gate job: reads PLAN_RESULT, PLAN_OK, PLAN_LEVEL, PLAN_TESTS, PLAN_JOBS and RESULTS (`job=result` words) from ENV."
 function gate()
-  results = Dict{String,String}()
-  for word in split(get(ENV, "RESULTS", ""))
-    k, v = occursin('=', word) ? split(word, '='; limit = 2) : (word, "")
-    results[k] = v
-  end
-  passed, lines = verdict(get(ENV, "PLAN_RESULT", ""), get(ENV, "PLAN_OK", ""), get(ENV, "PLAN_JOBS", ""), results)
+  results, problems = parse_results(get(ENV, "RESULTS", ""))
+  passed, lines = verdict(get(ENV, "PLAN_RESULT", ""), get(ENV, "PLAN_OK", ""), get(ENV, "PLAN_LEVEL", ""),
+                          get(ENV, "PLAN_TESTS", ""), get(ENV, "PLAN_JOBS", ""), results; problems)
   foreach(println, lines)
   println(passed ? "Every job the plan required passed." : "The required jobs did not all pass.")
   summary = get(ENV, "GITHUB_STEP_SUMMARY", "")
