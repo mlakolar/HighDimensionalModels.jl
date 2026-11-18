@@ -1,7 +1,7 @@
 name = "HighDimensionalModels"
 uuid = "676596c9-8d02-4dfa-b091-57818f5febe0"
-authors = ["Mladen Kolar <mkolar@chicagobooth.edu>"]
 version = "0.2.0-DEV"
+authors = ["Mladen Kolar <mkolar@chicagobooth.edu>"]
 
 [deps]
 ProximalBase = "0a755509-c5b1-5d6f-9b24-59bcda3c37a3"
@@ -12,7 +12,7 @@ StatsAPI = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
 Aqua = "0.8"
 LinearAlgebra = "1"
 ParallelTestRunner = "2.10"
-ProximalBase = "0.6"
+ProximalBase = "0.6, 0.5"
 ProximalSolvers = "0.3.2"
 Random = "1"
 StatsAPI = "1"
