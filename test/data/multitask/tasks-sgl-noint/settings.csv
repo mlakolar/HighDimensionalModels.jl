@@ -1,9 +1,0 @@
-tasks,3
-shared,false
-row_norm,l2
-alpha,0.7
-intercept,false
-standardize_x,false
-task_weights,equal
-lambda_max,0.9426765178124695
-levels,1

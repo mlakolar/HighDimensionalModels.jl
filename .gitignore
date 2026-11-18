@@ -3,20 +3,17 @@
 *.jl.mem
 /Manifest*.toml
 /test/Manifest*.toml
-/examples/Manifest*.toml
 /benchmark/Manifest*.toml
 /benchmark/results/
 /benchmark/__pycache__/
 /docs/build/
 .vscode/
 /docs/Manifest*.toml
-/docs/src/examples/
+/docs/receipt.toml
 
-# Generated master dependency test environments
-.master-test-env/
-
-# Local Julia-minor environments are regenerated from master checkouts
-/Manifest-v*.toml
+# Checkouts of ProximalBase and ProximalSolvers and the test environments built from them
+# (scripts/dependencies.jl; HDM_DEPS_DIR moves them)
+/.deps/
 
 # Local run material of the codex orchestrator (journals, prompts, logs, depots)
 /.codex-orchestrator/

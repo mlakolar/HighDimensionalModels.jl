@@ -115,15 +115,10 @@ end
 @testset "this repository's inventory" begin
   inv = TS.load(joinpath(@__DIR__, "testsuite.toml"))
   @test TS.check(inv, TS.discover(@__DIR__)) === nothing
-  @test "testsuite_validation" in inv.parallel
-  @test inv.subprocess["deprecated"] == ["--depwarn=yes"]
-  @test inv.subprocess["extensions_absent"] == ["--depwarn=error"]
-  # Fixture and helper files are named one by one.
-  for name in TS.discover(@__DIR__)
-    if startswith(name, "data/") || startswith(name, "golden/")
-      @test haskey(inv.not_tests, name)
-    end
-  end
+  @test TS.alltests(inv) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_reference", "smoke", "statsapi", "testsuite_validation"]
+  @test isempty(inv.serial) && isempty(inv.subprocess)
+  # Helpers and fixtures are named one by one, with a reason.
+  @test Set(keys(inv.not_tests)) == Set(["testsuite"])
 end
 
 @testset "test expressions" begin
@@ -159,26 +154,68 @@ end
 end
 
 @testset "worker count" begin
-  @test TS.worker_threads("2") == 2
-  @test TS.worker_threads("1") == 1
-  for bad in ("0", "-1", "two", "", "1.5")
-    @test occursin("HDM_TEST_THREADS must be a positive integer", message(() -> TS.worker_threads(bad)))
-  end
-
-  # Workers × threads stay within the CPU budget, with at least one worker.
-  @test TS.max_workers(2, 4) == 2      # a 4-CPU container on a larger host
-  @test TS.max_workers(2, 32) == 16
-  @test TS.max_workers(2, 3) == 1
-  @test TS.max_workers(2, 1) == 1
-  @test TS.max_workers(1, 12) == 12
-  @test TS.max_workers(4, 12) == 3
   @test 1 <= TS.cpu_threads() <= Sys.CPU_THREADS
   if isdefined(Sys, :EFFECTIVE_CPU_THREADS)
     @test TS.cpu_threads() == Sys.EFFECTIVE_CPU_THREADS
   else
     @test TS.cpu_threads() == Sys.CPU_THREADS
   end
-  @test TS.max_workers(2) == max(1, TS.cpu_threads() ÷ 2)
+end
+
+@testset "the runner's report is checked against the selection" begin
+  # Completed rows as the runner prints them: without --verbose, with --verbose on Julia 1.10, and
+  # with --verbose on Julia 1.11 and later (an extra compile-time column).
+  plain(name, i) = "$(rpad(name, 14)) ($i) │     0.46 │   0.01 │  2.5 │      53.32 │   394.35 │"
+  verbose10(name, i) = "$(rpad(name, 14)) ($i) │    14.56 │     2.13 │   0.05 │  0.3 │     149.11 │   408.26 │"
+  verbose13(name, i) = "$(rpad(name, 14)) ($i) │    17.35 │     1.75 │   11.05 │   0.02 │  0.1 │     237.27 │   499.62 │"
+  started(name, i) = "$(rpad(name, 14)) ($i) │         started at 2026-11-17T18:17:58.702"
+  failed(name, i) = "$(rpad(name, 14)) ($i) │    0.46 │         failed at 2026-11-17T18:17:58.702"
+  table(names; row = plain, extra = String[]) =
+    ["HighDimensionalModels tests: a selection, $(length(names)) of 8 files",
+     "  workers: 1 Julia thread and 1 BLAS thread each",
+     TS.SELECTION_PREFIX * join(names, " "),
+     "Running $(length(names)) tests using 2 parallel jobs.",
+     "                   │   Test   │ ──────────────── CPU ──────────────── │",
+     "Test      (Worker) │ time (s) │ GC (s) │ GC % │ Alloc (MB) │ RSS (MB) │",
+     extra...,
+     [row(name, i) for (i, name) in enumerate(names)]...,
+     "", "Test Summary: | Pass  Total  Time", "  Overall     |    4      4  4.2s", "    SUCCESS"]
+  @test TS.check_run(table(["lasso", "smoke"])) == ["lasso", "smoke"]
+  @test TS.check_run(table(["lasso", "smoke"]), ["smoke", "lasso"]) == ["lasso", "smoke"]
+  @test TS.check_run(table(["lasso", "smoke"]; row = verbose10)) == ["lasso", "smoke"]
+  @test TS.check_run(table(["lasso", "smoke"]; row = verbose13)) == ["lasso", "smoke"]
+  # Colored output (CI runs with --color=yes).
+  colored = replace.(table(["lasso", "smoke"]), "lasso   " => "\e[32mlasso\e[39m   ")
+  @test TS.check_run(colored) == ["lasso", "smoke"]
+  # With --verbose a started row precedes each completed one.
+  with_started = table(["lasso", "smoke"]; row = verbose13, extra = [started("lasso", 1), started("smoke", 2)])
+  @test TS.check_run(with_started) == ["lasso", "smoke"]
+  # The selection differs from the expectation, is missing, is empty, or is printed twice.
+  @test occursin("selected lasso, expected lasso smoke", message(() -> TS.check_run(table(["lasso"]), ["lasso", "smoke"])))
+  @test occursin("selected lasso smoke, expected lasso", message(() -> TS.check_run(table(["lasso", "smoke"]), ["lasso"])))
+  @test occursin("found 0", message(() -> TS.check_run(filter(l -> !startswith(l, TS.SELECTION_PREFIX), table(["lasso"])))))
+  @test occursin("selected no test file", message(() -> TS.check_run(table(String[]))))
+  @test occursin("found 2", message(() -> TS.check_run(vcat(table(["lasso"]), table(["lasso"])))))
+  # A selected file without a completed row: the table is short or absent, the file started and did
+  # not finish (the negative control: its started row alone is no evidence), or it failed.
+  short = table(["lasso", "smoke"])
+  short[3] = TS.SELECTION_PREFIX * "lasso smoke statsapi"
+  @test occursin("without a completed row in the runner's output: statsapi", message(() -> TS.check_run(short)))
+  @test occursin("without a completed row in the runner's output: lasso", message(() -> TS.check_run(table(["lasso"])[1:3])))
+  unfinished = table(["lasso", "smoke"]; row = verbose13, extra = [started("lasso", 1), started("smoke", 2), started("statsapi", 1)])
+  unfinished[3] = TS.SELECTION_PREFIX * "lasso smoke statsapi"
+  @test occursin("without a completed row in the runner's output: statsapi", message(() -> TS.check_run(unfinished)))
+  @test occursin("without a completed row in the runner's output: lasso",
+                 message(() -> TS.check_run(["Selected test files: lasso", started("lasso", 1)], ["lasso"])))
+  @test occursin("without a completed row in the runner's output: lasso",
+                 message(() -> TS.check_run(["Selected test files: lasso", failed("lasso", 1)], ["lasso"])))
+  # A row with too few numeric columns, or with text in one, does not count.
+  @test occursin("without a completed row", message(() -> TS.check_run(["Selected test files: lasso", "lasso (1) │ 0.46 │ 0.01 │"])))
+  @test occursin("without a completed row", message(() -> TS.check_run(["Selected test files: lasso", replace(plain("lasso", 1), "2.5" => "abc")])))
+  # A name that only prefixes a reported file does not count.
+  prefix = table(["lasso_reference"])
+  prefix[3] = TS.SELECTION_PREFIX * "lasso"
+  @test occursin("without a completed row in the runner's output: lasso", message(() -> TS.check_run(prefix)))
 end
 
 # A child Julia in this test environment, without coverage (later flags win).
@@ -220,7 +257,7 @@ end
   runtests = joinpath(@__DIR__, "runtests.jl")
   code, out = output(julia(runtests, "--list"))
   @test code == 0
-  @test occursin("testsuite_validation", out) && occursin("lowrank_sparse", out)
+  @test occursin("testsuite_validation", out) && occursin("lasso_reference", out)
   code, out = output(julia(runtests, "--only=lasso,no_such_test"))
   @test code != 0
   @test occursin("--only: no test file no_such_test", out)

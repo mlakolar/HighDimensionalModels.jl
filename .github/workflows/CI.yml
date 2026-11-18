@@ -1,112 +1,101 @@
 name: CI
+# The plan job decides what runs (scripts/ci_plan.jl, test/impact.toml; CONTRIBUTING.md) and fixes
+# the commits of ProximalBase and ProximalSolvers that every job of the run uses:
+# - pull requests and pushes to master: the complete test suite on Linux with Julia lts and 1,
+#   and the benchmark integrity checks. A change to documentation alone runs no package test and
+#   no benchmark job; a change to benchmark/ alone runs only the benchmark integrity checks.
+# - nightly and manual runs (`gh workflow run CI.yml --ref <branch>`): the same, plus macOS and
+#   Windows with Julia 1. A manual run may pin either commit with its inputs.
+# The `gate` job is the required check. It passes only if the plan succeeded and every job the
+# plan required succeeded and every other job was skipped. It is named `gate` only in
+# pull_request runs, so a manual run on a PR branch cannot stand in for the PR's check.
 on:
+  pull_request:
   push:
     branches:
       - master
-    tags: ['*']
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
+  schedule:
+    - cron: '17 4 * * *'
   workflow_dispatch:
+    inputs:
+      proximalbase_rev:
+        description: 'ProximalBase commit (40 hex digits); empty: the tip of master'
+        required: false
+        default: ''
+      proximalsolvers_rev:
+        description: 'ProximalSolvers commit (40 hex digits); empty: the tip of master'
+        required: false
+        default: ''
 concurrency:
-  # Skip intermediate builds: always.
-  # Cancel intermediate builds: only if it is a pull request build.
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+  # A new commit cancels a PR's older run. Every other run has its own group: a push to master is
+  # never cancelled or replaced by a later one.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
 jobs:
+  plan:
+    name: Test plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      level: ${{ steps.plan.outputs.level }}
+      tests: ${{ steps.plan.outputs.tests }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+      coverage: ${{ steps.plan.outputs.coverage }}
+      ok: ${{ steps.plan.outputs.ok }}
+      proximalbase: ${{ steps.dependencies.outputs.proximalbase }}
+      proximalsolvers: ${{ steps.dependencies.outputs.proximalsolvers }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A PR checks out its merge commit: HEAD^1 is the base it merges into, HEAD^2 the PR head.
+          fetch-depth: 2
+      - name: Fetch the commit before the push
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: git fetch --no-tags --depth=1 origin "$BEFORE" || echo "::warning::$BEFORE not found; the push runs every test file."
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - name: Plan the tests
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) args=(--base=HEAD^1 --head=HEAD) ;;
+            push) args=("--base=$BEFORE" --head=HEAD) ;;
+            schedule | workflow_dispatch) args=() ;;
+            *) echo "::error::Unexpected event $EVENT."; exit 1 ;;
+          esac
+          julia --startup-file=no scripts/ci_plan.jl "--event=$EVENT" "${args[@]}" \
+            "--github-output=$GITHUB_OUTPUT" "--summary=$GITHUB_STEP_SUMMARY"
+      # Resolved once here: every job of the run gets the same pair (scripts/dependencies.jl).
+      - name: Resolve the commits of ProximalBase and ProximalSolvers
+        id: dependencies
+        env:
+          PROXIMALBASE_INPUT: ${{ github.event.inputs.proximalbase_rev }}
+          PROXIMALSOLVERS_INPUT: ${{ github.event.inputs.proximalsolvers_rev }}
+        run: |
+          if [ -n "$PROXIMALBASE_INPUT" ]; then export HDM_PROXIMALBASE_REV="$PROXIMALBASE_INPUT"; fi
+          if [ -n "$PROXIMALSOLVERS_INPUT" ]; then export HDM_PROXIMALSOLVERS_REV="$PROXIMALSOLVERS_INPUT"; fi
+          julia --startup-file=no scripts/dependencies.jl --resolve
+
   test:
-    name: Registered - Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
-      actions: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        version:
-          - 'lts'
-          - '1'
-        os:
-          - ubuntu-latest
-        arch:
-          - x64
-        include:
-          - version: '1'
-            os: macos-latest
-            arch: aarch64
-          - version: '1'
-            os: windows-latest
-            arch: x64
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: ${{ matrix.version }}
-          arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v3
-      - name: Check naming conventions
-        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check_naming.py
-      - name: Test the canonical API with deprecations as errors
-        run: julia --color=yes scripts/test_registered.jl
-        env:
-          JULIA_NUM_THREADS: "2"
-          JULIA_TEST_DEPWARN: "error"
-          JULIA_TEST_COVERAGE: "true"
-          # Two test workers, each with two Julia threads and one BLAS thread.
-          PTR_NUM_JOBS: "2"
-      - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v7
-        with:
-          # Codecov repository lookup requires its canonical lowercase slug.
-          slug: mlakolar/highdimensionalmodels.jl
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-  master-integration:
-    name: Master dependency integration
+    name: Julia ${{ matrix.version }} - ubuntu-latest
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' test ')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      actions: write
+      actions: write # julia-actions/cache deletes its old caches
       contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: '1'
-      - uses: julia-actions/cache@v3
-      - run: julia scripts/instantiate.jl
-      - run: julia scripts/test_master.jl
-        env:
-          JULIA_NUM_THREADS: "2"
-          JULIA_TEST_DEPWARN: "error"
-          PTR_NUM_JOBS: "2"
-  examples:
-    name: Examples
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: julia-actions/setup-julia@v3
-        with:
-          version: '1'
-      - uses: julia-actions/cache@v3
-      - run: julia scripts/instantiate_release.jl examples
-      - run: julia --project=examples examples/run_all.jl
-  knockoff-extension:
-    name: Registered Knockoffs extension - Julia ${{ matrix.version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    env:
+      HDM_PROXIMALBASE_REV: ${{ needs.plan.outputs.proximalbase }}
+      HDM_PROXIMALSOLVERS_REV: ${{ needs.plan.outputs.proximalsolvers }}
     strategy:
       fail-fast: false
       matrix:
@@ -116,24 +105,200 @@ jobs:
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-      # Compiled files restored from a runner with other CPU features crash
-      # LLVM on Julia 1.10 here (#167); keep the package and registry caches.
+          arch: x64
       - uses: julia-actions/cache@v3
-        with:
-          cache-compiled: 'false'
-      - name: Test the optional diagonal optimizer and native sampling with registered releases
-        run: julia --color=yes scripts/test_knockoff_extension.jl
+      # scripts/test.jl fails unless the runner reports every selected test file, and unless the
+      # selection is the one given here (all: every file of test/testsuite.toml).
+      - name: Run the planned test files
+        shell: bash
         env:
-          JULIA_NUM_THREADS: '1'
-          OPENBLAS_NUM_THREADS: '1'
-          JULIA_TEST_COVERAGE: 'true'
-      - uses: julia-actions/julia-processcoverage@v1
+          TESTS: ${{ needs.plan.outputs.tests }}
+          # Coverage only from complete suites, so every upload measures the same thing. Both Julia
+          # versions upload: lts attributes method-definition lines that Julia 1 does not, and
+          # Codecov merges the uploads of a commit.
+          JULIA_TEST_COVERAGE: ${{ needs.plan.outputs.coverage }}
+          PTR_NUM_JOBS: '2'
+        run: |
+          [[ "$TESTS" =~ ^[a-z0-9_,/]+$ ]] || { echo "::error::Invalid test selection '$TESTS'."; exit 1; }
+          if [ "$TESTS" = all ]; then selection=(); else selection=("--only=$TESTS"); fi
+          julia --color=yes scripts/test.jl --verbose "${selection[@]}"
+      - name: Upload the receipt and the manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
         with:
-          directories: src,ext
+          name: dependencies-julia-${{ matrix.version }}-ubuntu
+          path: |
+            .deps/test-env/*/receipt.toml
+            .deps/test-env/*/Manifest*.toml
+          include-hidden-files: true
+          if-no-files-found: warn
+      - uses: julia-actions/julia-processcoverage@v1
+        if: needs.plan.outputs.coverage == 'true'
       - uses: codecov/codecov-action@v7
+        if: needs.plan.outputs.coverage == 'true'
         with:
           # Codecov repository lookup requires its canonical lowercase slug.
           slug: mlakolar/highdimensionalmodels.jl
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  benchmark-integrity:
+    name: Benchmark integrity
+    needs: plan
+    if: contains(format(' {0} ', needs.plan.outputs.jobs), ' benchmark-integrity ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write # julia-actions/cache deletes its old caches
+      contents: read
+    env:
+      HDM_PROXIMALBASE_REV: ${{ needs.plan.outputs.proximalbase }}
+      HDM_PROXIMALSOLVERS_REV: ${{ needs.plan.outputs.proximalsolvers }}
+      HDM_DEPS_DIR: ${{ github.workspace }}/.deps
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Check the analysis scripts
+        run: python3 benchmark/check_analysis.py
+      - name: Prepare the checkouts of ProximalBase and ProximalSolvers
+        run: julia scripts/instantiate.jl --checkouts
+      # No timing is compared and nothing here is a performance gate. The commands are those under
+      # the heading "CI integrity checks" of benchmark/README.md (its first command is the step
+      # "Check the analysis scripts" above); keep them in step.
+      - name: Integrity checks of the benchmark harness
+        shell: bash
+        env:
+          PROXIMALBASE_CHECKOUT: ${{ github.workspace }}/.deps/ProximalBase.jl
+          PROXIMALSOLVERS_CHECKOUT: ${{ github.workspace }}/.deps/ProximalSolvers.jl
+        run: |
+          ENV_DIR="$RUNNER_TEMP/hdm-bench-env"
+          OUT="$RUNNER_TEMP/hdm-bench-out"
+          julia benchmark/setup.jl "$PWD" "$ENV_DIR" "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT"
+          JULIA_NUM_THREADS=1 julia --project="$ENV_DIR" benchmark/check_certificates.jl
+          export HDM_EXPECTED_PACKAGE_ROOT="$PWD" HDM_SAMPLES=5 HDM_SECONDS=0.2 JULIA_NUM_THREADS=1
+          HDM_GROUPS=lasso HDM_OUTPUT="$OUT/lasso" julia --project="$ENV_DIR" benchmark/run.jl
+          python3 benchmark/validate.py "$OUT/lasso" "$OUT/lasso.json"
+          code=0
+          HDM_GROUPS=controls HDM_OUTPUT="$OUT/controls" julia --project="$ENV_DIR" benchmark/run.jl > "$OUT/controls.log" || code=$?
+          cat "$OUT/controls.log"
+          [ "$code" -eq 2 ]
+          grep -qx 'CASE controls/lasso/one-pass status=target_missed' "$OUT/controls.log"
+          python3 benchmark/validate.py "$OUT/controls" "$OUT/controls.json"
+
+  test-cross:
+    name: Julia 1 - ${{ matrix.os }}
+    needs: plan
+    # Nightly and manual runs only: the plan never requires it for a pull request.
+    if: github.event_name != 'pull_request' && contains(format(' {0} ', needs.plan.outputs.jobs), ' test-cross ')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      actions: write # julia-actions/cache deletes its old caches
+      contents: read
+    env:
+      HDM_PROXIMALBASE_REV: ${{ needs.plan.outputs.proximalbase }}
+      HDM_PROXIMALSOLVERS_REV: ${{ needs.plan.outputs.proximalsolvers }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: aarch64
+          - os: windows-latest
+            arch: x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+          arch: ${{ matrix.arch }}
+      - uses: julia-actions/cache@v3
+      - name: Run the planned test files
+        shell: bash
+        env:
+          TESTS: ${{ needs.plan.outputs.tests }}
+          PTR_NUM_JOBS: '2'
+        run: |
+          [[ "$TESTS" =~ ^[a-z0-9_,/]+$ ]] || { echo "::error::Invalid test selection '$TESTS'."; exit 1; }
+          if [ "$TESTS" = all ]; then selection=(); else selection=("--only=$TESTS"); fi
+          julia --color=yes scripts/test.jl --verbose "${selection[@]}"
+      - name: Upload the receipt and the manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependencies-julia-1-${{ matrix.os }}
+          path: |
+            .deps/test-env/*/receipt.toml
+            .deps/test-env/*/Manifest*.toml
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  gate:
+    # Runs after every job, even when one failed or the run was cancelled (a skipped required check
+    # would count as passing). It reads this run's job results, not the REST API.
+    name: ${{ github.event_name == 'pull_request' && 'gate' || format('gate ({0})', github.event_name) }}
+    needs: [plan, test, test-cross, benchmark-integrity]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - name: Check that every required job passed
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_OK: ${{ needs.plan.outputs.ok }}
+          PLAN_LEVEL: ${{ needs.plan.outputs.level }}
+          PLAN_TESTS: ${{ needs.plan.outputs.tests }}
+          PLAN_JOBS: ${{ needs.plan.outputs.jobs }}
+          RESULTS: >-
+            test=${{ needs.test.result }}
+            test-cross=${{ needs.test-cross.result }}
+            benchmark-integrity=${{ needs.benchmark-integrity.result }}
+        run: julia --startup-file=no scripts/ci_plan.jl --gate
+
+  report:
+    # A failing run on master (push, nightly, manual) opens an issue, or comments on the open one;
+    # a manual run on another branch does not. No pull request code runs with this permission.
+    # The reports of different runs go one at a time through one concurrency group (GitHub keeps
+    # one pending job per group, so a report can be dropped when several runs fail at once, but
+    # two reports do not look for the issue at the same time).
+    name: Report a failing run
+    needs: gate
+    concurrency:
+      group: ${{ github.workflow }}-report
+      cancel-in-progress: false
+    if: >-
+      always() && needs.gate.result == 'failure' && github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          export title="CI failing on master"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="The $EVENT run $url failed at $GITHUB_SHA. The job summaries list the commits of ProximalBase and ProximalSolvers it used; the dependency receipts are attached to the run."
+          # Every open issue, page by page (pull requests are listed too and have a `pull_request`
+          # key), not the search index, which can lag behind a new issue. If the listing fails the
+          # assignment fails and bash -e stops the step, so a failed or partial listing is not
+          # read as "no tracker" and nothing is created.
+          numbers=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
+            --jq '.[] | select((has("pull_request") | not) and .title == env.title) | .number')
+          number=$(printf '%s\n' "$numbers" | sort -n | sed -n '1p')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

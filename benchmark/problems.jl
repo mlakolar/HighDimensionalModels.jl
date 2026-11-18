@@ -1,20 +1,14 @@
 # Inputs of the benchmark cases: for a scenario key and a repetition,
 # scenario(key, rep) returns a NamedTuple of raw Float64 arrays, drawn with the
-# standard library only. Keys are family-[variant-]shape, as ls-sparse-500x200;
-# SCENARIOS lists them. Fields by family: X and y; weights and offset (weighted
-# variants); groups; Y (multitask and low rank); Xs and ys, vectors of a
-# design and a response per task (tasks; the shared variant stores one design
-# object for every task); x, the locations of a signal; Sigma and mu
-# (knockoffs); d, the treatment (inference); truth, the coefficients that
-# generated the data, and effect, the treatment effect. Float32 copies are made
-# by the caller.
+# standard library only. Keys are family-shape, as ls-200x50; SCENARIOS lists
+# them. Fields: X and y, and truth, the coefficients that generated the data.
+# Float32 copies are made by the caller.
 
-using LinearAlgebra, Random, SparseArrays, Statistics, SHA
+using LinearAlgebra, Random, Statistics, SHA
 
-# Only the random draws are the same on every Julia version; BLAS, LAPACK and
-# Statistics may round differently. So the inputs are computed from the draws
-# by elementwise operations and by the products and moments below, which add
-# in a fixed order, and are then identical on Julia 1.10 and 1.13.
+# BLAS, LAPACK and Statistics may round differently between Julia versions. So
+# the inputs are computed from the draws by elementwise operations and by the
+# products and moments below, which add in a fixed order.
 function product(X::AbstractMatrix, b::AbstractVector)
   y = zeros(size(X, 1))
   for j in axes(X, 2), i in axes(X, 1)
@@ -22,17 +16,6 @@ function product(X::AbstractMatrix, b::AbstractVector)
   end
   y
 end
-
-function product(X::SparseMatrixCSC, b::AbstractVector)
-  y = zeros(size(X, 1))
-  rows, vals = rowvals(X), nonzeros(X)
-  for j in axes(X, 2), k in nzrange(X, j)
-    y[rows[k]] += vals[k] * b[j]
-  end
-  y
-end
-
-product(X::AbstractMatrix, B::AbstractMatrix) = reduce(hcat, [product(X, B[:, j]) for j in axes(B, 2)])
 
 function sample_mean(v)
   s = 0.0
@@ -97,24 +80,6 @@ function gaussian_design(rng, n, p; ρ = 0.0)
   (Z .+ transpose(m)) .* transpose(s)
 end
 
-sigmoid(t) = t >= 0 ? inv(1 + exp(-t)) : exp(t) / (1 + exp(t))
-
-# a Poisson draw by inversion of the distribution function
-function poisson_draw(rng, μ)
-  u, k = rand(rng), 0
-  term = exp(-μ)
-  total = term
-  while u > total && k < 10_000
-    k += 1
-    term *= μ / k
-    total += term
-  end
-  Float64(k)
-end
-
-# Laplace noise, heavier tailed than Gaussian
-laplace(rng, n) = [(rand(rng) < 0.5 ? -1.0 : 1.0) * exponential_draw(rng) for _ in 1:n]
-
 function least_squares(rng, n, p; k = 5, ρ = 0.0)
   X = gaussian_design(rng, n, p; ρ)
   β = sparse_truth(rng, p, k)
@@ -122,212 +87,14 @@ function least_squares(rng, n, p; k = 5, ρ = 0.0)
   (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), truth = β)
 end
 
-# about 5% of the entries stored, the columns on scales in [0.5, 2]
-function sparse_least_squares(rng, n, p; k = 5)
-  stored = uniform(rng, n, p) .< 0.05
-  values = gaussian(rng, n, p) .* transpose(0.5 .+ 1.5 .* uniform(rng, p))
-  X = sparse(stored .* values)
-  β = sparse_truth(rng, p, k)
-  signal = product(X, β)
-  (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), truth = β)
-end
-
-# positive weights and an offset; the noise variance is inverse to the weight
-function weighted_least_squares(rng, n, p; k = 5)
-  X = gaussian_design(rng, n, p)
-  β = sparse_truth(rng, p, k)
-  weights, offset = 0.5 .+ uniform(rng, n), 0.3 .* gaussian(rng, n)
-  signal = product(X, β)
-  y = offset .+ 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n) ./ sqrt.(weights)
-  (; X, y, weights, offset, truth = β)
-end
-
-function logistic(rng, n, p; k = 5, weighted = false)
-  X = gaussian_design(rng, n, p)
-  β = 0.5 .* sparse_truth(rng, p, k)
-  weights = weighted ? 0.5 .+ uniform(rng, n) : nothing
-  offset = weighted ? 0.3 .* gaussian(rng, n) : nothing
-  η = -0.3 .+ product(X, β) .+ (weighted ? offset : 0.0)
-  y = Float64.(uniform(rng, n) .< sigmoid.(η))
-  weighted ? (; X, y, weights, offset, truth = β) : (; X, y, truth = β)
-end
-
-function poisson(rng, n, p; k = 5)
-  X = gaussian_design(rng, n, p)
-  β = 0.25 .* sparse_truth(rng, p, k)
-  η = 0.5 .+ product(X, β)
-  (; X, y = [poisson_draw(rng, exp(t)) for t in η], truth = β)
-end
-
-# twelve groups of five consecutive columns, correlated within the group; three
-# active groups with three nonzero coefficients each
-function grouped(rng, n, ngroups, size)
-  p = ngroups * size
-  groups = [collect((g - 1) * size + 1:g * size) for g in 1:ngroups]
-  X = gaussian_design(rng, n, p)
-  for G in groups
-    sd = transpose([sample_sd(X[:, j]) for j in G])
-    X[:, G] .= sqrt(0.7) .* X[:, G] .+ sqrt(0.3) .* gaussian(rng, n) .* sd
-  end
-  β = zeros(p)
-  for g in draw_indices(rng, ngroups, 3)
-    G = groups[g]
-    β[G[draw_indices(rng, size, 3)]] .= draw_signs(rng, 3) .* (0.5 .+ uniform(rng, 3))
-  end
-  signal = product(X, β)
-  (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), groups, truth = β)
-end
-
-# five nonzero rows shared by the q responses
-function multitask(rng, n, p, q; k = 5)
-  X = gaussian_design(rng, n, p)
-  B = zeros(p, q)
-  B[draw_indices(rng, p, k), :] .= 0.7 .* gaussian(rng, k, q)
-  signal = product(X, B)
-  Y = transpose(gaussian(rng, q)) .+ signal .+ noise_sd(vec(signal), 4.0) .* gaussian(rng, n, q)
-  (; X, Y, truth = B)
-end
-
-# Tasks with nₜ = ns[t] rows and the same p columns, each with its own design,
-# whose column means and scales differ between the tasks, so that centering
-# and scaling within the tasks matter; or, with shared, one design object of
-# ns[1] rows for all the tasks. k nonzero rows of B, with entries 0.7 times
-# normal draws, are shared by the tasks, and each response has its own
-# intercept and noise at a signal-to-noise ratio of four.
-function tasks(rng, ns, p; k = 5, shared = false)
-  q = length(ns)
-  Xs = shared ? fill(gaussian_design(rng, ns[1], p), q) : [gaussian_design(rng, n, p) for n in ns]
-  B = zeros(p, q)
-  B[draw_indices(rng, p, k), :] .= 0.7 .* gaussian(rng, k, q)
-  β0 = gaussian(rng, q)
-  ys = map(1:q) do t
-    signal = product(Xs[t], B[:, t])
-    β0[t] .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, size(Xs[t], 1))
-  end
-  (; Xs, ys, truth = B)
-end
-
-# a coefficient matrix of rank two
-function lowrank(rng, n, p, q; rank = 2)
-  X = gaussian_design(rng, n, p)
-  B = product(gaussian(rng, p, rank), gaussian(rng, rank, q)) ./ sqrt(p)
-  signal = product(X, B)
-  Y = transpose(gaussian(rng, q)) .+ signal .+ noise_sd(vec(signal), 4.0) .* gaussian(rng, n, q)
-  (; X, Y, truth = B)
-end
-
-function quantile_regression(rng, n, p; k = 4)
-  X = gaussian_design(rng, n, p)
-  β = sparse_truth(rng, p, k)
-  signal = product(X, β)
-  (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* laplace(rng, n), truth = β)
-end
-
-# a piecewise-constant signal on unit-spaced locations, with segments of random
-# lengths and levels
-function piecewise_constant(rng, n; segments = 6)
-  cuts = sort!(draw_indices(rng, n - 1, segments - 1))
-  levels = 2 .* gaussian(rng, segments)
-  θ = [levels[searchsortedfirst(cuts, i)] for i in 1:n]
-  (; x = collect(1.0:n), y = θ .+ 0.5 .* gaussian(rng, n), truth = θ)
-end
-
-# a continuous piecewise-linear signal on irregular, strictly increasing
-# locations
-function piecewise_linear(rng, n; knots = 4)
-  x = cumsum(0.5 .+ uniform(rng, n))
-  at = sort!(x[draw_indices(rng, n - 2, knots) .+ 1])
-  slopes = gaussian(rng, knots + 1) ./ sample_sd(x)
-  θ = slopes[1] .* x
-  for k in 1:knots
-    θ .+= (slopes[k+1] - slopes[k]) .* max.(x .- at[k], 0.0)
-  end
-  (; x, y = θ .+ 0.25 * sample_sd(θ) .* gaussian(rng, n), truth = θ)
-end
-
-function trend_sine(rng, n; irregular = false)
-  t = range(0, 1; length = n)
-  y = sin.(4π .* t) .+ 0.6 .* (t .> 0.55) .+ 0.2 .* gaussian(rng, n)
-  irregular ? (; y, x = cumsum(0.8 .+ 0.4 .* uniform(rng, n))) : (; y)
-end
-
-# regression whose coefficients are piecewise constant in the column index;
-# n > p, so X has full column rank
-function fused_regression(rng, n, p)
-  X = gaussian(rng, n, p)
-  β = zeros(p)
-  b = p ÷ 6
-  β[b+1:3b] .= 1.0
-  β[4b+1:5b] .= -1.0
-  signal = product(X, β)
-  (; X, y = signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), truth = β)
-end
-
-# rows drawn from N(0, Σ), Σ = diag(d) R diag(d) with R autoregressive (0.4) and
-# scales d in [0.5, 2], so that diag(Σ) is not one; the columns are the
-# autoregression X₁ = Z₁, Xⱼ = 0.4Xⱼ₋₁ + √0.84 Zⱼ, scaled by d
-function knockoff(rng, n, p; k = 10)
-  powers = accumulate(*, fill(0.4, p - 1); init = 1.0)
-  R = [i == j ? 1.0 : powers[abs(i - j)] for i in 1:p, j in 1:p]
-  d = 0.5 .+ 1.5 .* uniform(rng, p)
-  # the same order of products in both triangles, so that Sigma is symmetric
-  Sigma = [d[min(i, j)] * R[i, j] * d[max(i, j)] for i in 1:p, j in 1:p]
-  X = gaussian(rng, n, p)
-  for j in 2:p
-    X[:, j] .= 0.4 .* X[:, j-1] .+ sqrt(0.84) .* X[:, j]
-  end
-  X .*= transpose(d)
-  β = sparse_truth(rng, p, k)
-  signal = product(X, β)
-  (; X, y = signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), Sigma, mu = zeros(p), truth = β)
-end
-
-# the partially linear model y = 0.5 d + Xβ + ε of R's hdm, with the treatment
-# d = Xγ + v depending on a few of the controls
-function inference(rng, n, p; k = 5)
-  X = gaussian_design(rng, n, p)
-  β, γ = sparse_truth(rng, p, k), sparse_truth(rng, p, k)
-  d = product(X, γ) .+ gaussian(rng, n)
-  (; X, y = 0.5 .* d .+ product(X, β) .+ gaussian(rng, n), d, truth = β, effect = 0.5)
-end
-
 const SCENARIO_BUILDERS = [
-  # quick shapes
+  # quick shape
   "ls-200x50" => rng -> least_squares(rng, 200, 50),
-  "ls-sparse-500x200" => rng -> sparse_least_squares(rng, 500, 200),
+  # extended shapes
   "ls-tall-5000x40" => rng -> least_squares(rng, 5000, 40),
   "ls-wide-100x400" => rng -> least_squares(rng, 100, 400),
   "ls-corr-300x100" => rng -> least_squares(rng, 300, 100; ρ = 0.5),
-  "ls-weighted-200x50" => rng -> weighted_least_squares(rng, 200, 50),
-  "logistic-300x60" => rng -> logistic(rng, 300, 60),
-  "logistic-weighted-300x60" => rng -> logistic(rng, 300, 60; weighted = true),
-  "poisson-300x40" => rng -> poisson(rng, 300, 40),
-  "groups-200x60" => rng -> grouped(rng, 200, 12, 5),
-  "multi-200x40x5" => rng -> multitask(rng, 200, 40, 5),
-  "tasks-40-80-120x60" => rng -> tasks(rng, [40, 80, 120], 60),
-  "lowrank-150x30x10" => rng -> lowrank(rng, 150, 30, 10),
-  "lowrank-wide-60x100x10" => rng -> lowrank(rng, 60, 100, 10),
-  "quantile-200x30" => rng -> quantile_regression(rng, 200, 30),
-  "signal-200" => rng -> piecewise_constant(rng, 200),
-  "fusedreg-150x60" => rng -> fused_regression(rng, 150, 60),
-  "trend-200" => rng -> piecewise_linear(rng, 200),
-  "slope-150x60" => rng -> least_squares(rng, 150, 60; k = 8),
-  "knockoff-300x50" => rng -> knockoff(rng, 300, 50),
-  "hdm-200x80" => rng -> inference(rng, 200, 80),
-  # extended shapes
   "ls-2000x1000" => rng -> least_squares(rng, 2000, 1000; k = 10),
-  "logistic-2000x500" => rng -> logistic(rng, 2000, 500; k = 10),
-  "quantile-1000x100" => rng -> quantile_regression(rng, 1000, 100; k = 6),
-  "tasks-100-400x200" => rng -> tasks(rng, [100, 400], 200),
-  "tasks-50-to-200x100" => rng -> tasks(rng, [50, 90, 130, 170, 200], 100),
-  "tasks-wide-100-400x1000" => rng -> tasks(rng, [100, 400], 1000),
-  "tasks-shared-300x200x5" => rng -> tasks(rng, fill(300, 5), 200; shared = true),
-  "signal-5000" => rng -> piecewise_constant(rng, 5000; segments = 12),
-  "trend-sine-1000" => rng -> trend_sine(rng, 1000),
-  "trend-sine-10000" => rng -> trend_sine(rng, 10000),
-  "trend-sine-10000-irregular" => rng -> trend_sine(rng, 10000; irregular = true),
-  "trend-sine-100000" => rng -> trend_sine(rng, 100000),
-  "trend-sine-1000000" => rng -> trend_sine(rng, 1000000),
 ]
 
 const SCENARIOS = String[first(b) for b in SCENARIO_BUILDERS]
@@ -341,16 +108,7 @@ end
 
 # A lowercase hex SHA-256 (64 characters) of the inputs over their sizes,
 # element types and bytes, stable across processes and Julia versions: fields
-# in the order of their names, arrays in column-major order, sparse matrices by
-# their compressed columns, numbers little-endian
-function hash_data!(io, a::SparseMatrixCSC)
-  write(io, "SparseMatrixCSC{$(eltype(a))}")
-  hash_data!(io, size(a))
-  hash_data!(io, a.colptr)
-  hash_data!(io, rowvals(a))
-  hash_data!(io, nonzeros(a))
-end
-
+# in the order of their names, arrays in column-major order, numbers little-endian
 function hash_data!(io, a::AbstractArray)
   write(io, "Array{$(eltype(a))}")
   hash_data!(io, size(a))

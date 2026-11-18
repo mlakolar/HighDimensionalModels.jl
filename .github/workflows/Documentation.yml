@@ -25,10 +25,22 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
+      # The commits of ProximalBase and ProximalSolvers (master unless pinned with
+      # HDM_PROXIMALBASE_REV and HDM_PROXIMALSOLVERS_REV) are printed and go to the job summary;
+      # the receipt and the manifest are uploaded below.
       - name: Install the documentation environment
-        run: julia scripts/instantiate_release.jl docs
+        run: julia scripts/instantiate.jl docs
       - name: Build and deploy
         run: julia --project=docs docs/make.jl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+      - name: Upload the receipt and the manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependencies-documentation
+          path: |
+            docs/receipt.toml
+            docs/*Manifest*.toml
+          if-no-files-found: warn

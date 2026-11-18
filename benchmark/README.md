@@ -1,35 +1,48 @@
 # Benchmarks
 
-This suite measures the time and Julia heap allocation of public estimator
-calls. Every timed output is checked by an accuracy certificate computed from
-the inputs and the returned coefficients, independently of the solver's stopping
-rule; an output that misses its target is a recorded failure, not a timing. It
-does not measure native (non-Julia) allocations or the statistical quality of
-the estimates. Peak memory is recorded only as the process-wide `maxrss_bytes`.
+This suite measures the time and Julia heap allocation of the public call
+`lasso(X, y, λ, solver)`. The output of each call is checked by an accuracy
+certificate computed from the inputs and the returned coefficients,
+independently of the solver's stopping rule and of its convergence flag; an
+output that misses its target is a recorded failure, not a timing. It does not
+measure native (non-Julia) allocations or the statistical quality of the
+estimates. Peak memory is recorded only as the process-wide `maxrss_bytes`.
+
+The package provides one estimator, the Gaussian lasso, on ProximalBase and
+ProximalSolvers. The cases, certificates and evidence of the estimators that
+the package no longer contains are on the branch `legacy/full` and in the GitHub
+release `benchmark-evidence`.
 
 ## Setup and selections
 
-From the package root, with Julia 1.10 or later and Python 3.11 or later:
+From the package root, with Julia 1.10 or later and Python 3.11 or later, and
+checkouts of ProximalBase and ProximalSolvers:
 
 ```sh
-julia benchmark/setup.jl "$PWD" benchmark/results/env
+julia benchmark/setup.jl "$PWD" benchmark/results/env "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT"
 JULIA_NUM_THREADS=1 julia --project=benchmark/results/env benchmark/run.jl
 python3 benchmark/summarize.py benchmark/results benchmark/results/summary
 ```
 
-`setup.jl PACKAGE_ROOT ENV_DIR [REFERENCE_ENV]` creates a fresh environment with
-the dependencies of `benchmark/Project.toml` and the checkout at `PACKAGE_ROOT`
-developed into it, which also works on Julia 1.10, where `[sources]` is ignored.
-It refuses an existing `ENV_DIR/Project.toml`. The runner needs one Julia
-thread, and sets one BLAS thread itself. The default is one quick Float64
-repetition: an exploratory check, with no between-run interval. Use a fresh
-output directory for each measurement series; existing records are never
-overwritten.
+`setup.jl PACKAGE_ROOT ENV_DIR PROXIMALBASE_CHECKOUT PROXIMALSOLVERS_CHECKOUT
+[REFERENCE_ENV]` creates a fresh environment with the dependencies of
+`benchmark/Project.toml` and develops the three checkouts into it by path with
+explicit `Pkg.develop` calls, which also work on Julia 1.10. It fails unless the
+manifest tracks exactly those three packages by path and each resolves to its
+given checkout, and it refuses an existing `ENV_DIR/Project.toml`. It also refuses a
+ProximalBase or ProximalSolvers checkout that is not the root of a git
+repository or has tracked or untracked changes (`git status --porcelain
+--untracked-files=all` not empty): commit the changes or use a clean checkout.
+The runner
+needs one Julia thread, and sets one BLAS thread itself. The default is one
+quick Float64 repetition: an exploratory check, with no between-run interval.
+Use a fresh output directory for each measurement series; the runner stops
+instead of writing over records with the same file prefix.
 
 | Setting | Default | Use |
 |---|---|---|
-| `HDM_SUITE` | `quick` | `extended` runs the quick cases and adds larger, wide and correlated shapes, sparse, weighted and Float32 inputs, and more paths and variants. |
-| `HDM_GROUPS` | All groups but `controls` | Comma-separated groups, selected before any data are drawn. |
+| `HDM_SUITE` | `quick` | `extended` runs the quick cases and adds the tall, wide, correlated, large and Float32 cases. |
+| `HDM_GROUPS` | `lasso` | Comma-separated groups (`lasso`, `controls`), selected before any data are drawn. |
 | `HDM_CASES` | All cases | Comma-separated globs on case ids (`*`, `?`), within the suite and groups. |
 | `HDM_REPETITION` | `1` | Process and input draw, numbered 1–10. |
 | `HDM_OUTPUT` | `benchmark/results` | Directory for the process records. |
@@ -37,89 +50,119 @@ overwritten.
 | `HDM_SECONDS` | `1` quick; `3` extended | Limit on the accumulated timed seconds of a case. |
 | `HDM_CASE_SECONDS` | `60` | Limit on a single compiled call; see `timeout` below. |
 | `HDM_PROFILE_SECONDS` | `0` | Positive values write diagnostic profiles of each `ok` case. |
-| `HDM_EXPECTED_PACKAGE_ROOT` | Unset | The checkout that must be loaded, verified before any case is built. |
+| `HDM_EXPECTED_PACKAGE_ROOT` | Unset | The HighDimensionalModels checkout that must be loaded, verified before any case is built. The runner also refuses to measure, with exit 3 and before any case is built, when the loaded ProximalBase or ProximalSolvers is not the root of a git checkout or has tracked or untracked changes. |
 | `HDM_LIST` | `false` | `true` prints the selected case ids, suites and targets, and exits. |
 
-A case id is `group/estimator/variant`. Run the group of the code you change;
-before a pull request that touches shared code (losses, coordinate descent,
-paths, standardization), run the quick suite of every group.
-
-| Group | Estimators | Run it for changes to |
-|---|---|---|
-| `lasso` | `lasso` (dense, sparse CSC, Gram, weights and offset, wide, correlated, large, Float32), `sqrt_lasso`, `scaled_lasso`, `LassoPath` with and without screening, `refit_lasso_path` | `src/lasso.jl`, `src/losses.jl`, `src/coordinate_descent.jl`, the coordinate descent and paths of ProximalSolvers |
-| `glm` | `glm_lasso` (logistic and Poisson; logistic with weights and offset, elastic net, MCP, SCAD, a large shape, Float32), `GLMLassoPath` | `src/glm.jl`, `src/penalties.jl`, proximal Newton |
-| `group` | `group_lasso` (`:orthonormal`, `:none`), `GroupLassoPath`, `sparse_group_lasso`, `SparseGroupLassoPath` | `src/group.jl`, `src/sparsegroup.jl` |
-| `multitask` | `multi_lasso`, `MultiLassoPath`, `multitask_lasso` (`:equal` and `:observations` task weights), `MultitaskLassoPath` (task-specific designs, a shared design) | `src/multiresponse.jl`, `src/multitask.jl` |
-| `lowrank` | `reduced_rank` (also wide and Float32), `nuclear_regression`, `sparse_reduced_rank`, `LowRankPath` | `src/lowrank.jl` |
-| `quantile` | `quantile_lasso` (exact with HiGHS, with an offset, a large shape; smoothed), `QuantileLassoPath` | `src/quantile.jl`, `ext/HighDimensionalModelsHiGHSExt.jl` |
-| `structured` | `fused_lasso` (signals, regression), `trend_filter` (signal, regression), `generalized_lasso`, `fused_lasso_path`, `trend_filter_path` | `src/structured.jl` |
-| `selection` | `slope`, `SLOPEPath`, `equicorrelated_s` with `gaussian_knockoffs`, `knockoff_filter`, `stability_selection` | `src/slope.jl`, `src/knockoffs.jl`, `src/stability.jl` |
-| `inference` | `rlasso`, `post_lasso`, `double_selection` | `src/hdm.jl` |
-| `controls` | A lasso stopped after one pass, which must end `target_missed` | The harness itself; never selected by default |
-
-For example, list the extended structured cases without measuring them:
+A case id is `group/estimator/variant`. For example, list the extended cases
+without measuring them:
 
 ```sh
-HDM_SUITE=extended HDM_GROUPS=structured HDM_LIST=true \
+HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
   julia --project=benchmark/results/env benchmark/run.jl
 ```
+
+## Cases
+
+| Case | Suite | Scenario | Target (relative gap) |
+|---|---|---|---|
+| `lasso/lasso/dense` | quick | `ls-200x50` | 1e-6 |
+| `lasso/lasso/tall` | extended | `ls-tall-5000x40` | 1e-6 |
+| `lasso/lasso/wide` | extended | `ls-wide-100x400` (p > n) | 1e-6 |
+| `lasso/lasso/correlated` | extended | `ls-corr-300x100` (equicorrelated columns, ρ = 0.5) | 1e-6 |
+| `lasso/lasso/large` | extended | `ls-2000x1000` | 1e-6 |
+| `lasso/lasso/float32` | extended | `ls-200x50`, Float32 | 1e-4 |
+| `controls/lasso/one-pass` | quick, with `HDM_GROUPS=controls` | `ls-200x50` | 1e-8, must end `target_missed` |
+
+`lasso` has no intercept, no standardization and no weights. The scenarios of
+`problems.jl` draw columns with shifted means and scales and a response with an
+intercept, so a case prepares its inputs, untimed: the columns are centered and
+scaled to mean square one, the response is centered, and the penalty level is
+`λ = 0.1 λmax` with `λmax = maxⱼ |xⱼ'y|/n` of those inputs. For the Float32 case
+the standardized Float64 inputs are rounded to Float32 first, `λmax` is computed
+from the rounded inputs (in Float64), and the level is rounded to Float32. In
+these coordinates the earlier lasso with an intercept and standardization
+solved the same scenarios at the same ratio `λ/λmax`. The solver is
+`CDSolver(rng = Xoshiro(...))` with the package's defaults otherwise (random
+coordinate order, `tol = 1e-7`); the Float32 case sets `tol = 1e-6`. The
+generator is a Xoshiro seeded from a SHA-256 digest (`harness_rng("solver")`)
+and restarted for each sample.
+
+Observation, not a guarantee: with ProximalBase
+`13891ccfd5c33a042c5df82d670abf1f2d786a0f` and ProximalSolvers
+`dac9f4b6819d9321117ee3cf3549e9e46a043f01`, on Julia 1.10.13 and 1.13.4, the six
+lasso cases `dense`, `tall`, `wide`, `correlated`, `large` and `float32` met
+their targets in each of the repetitions 1 to 10. The largest relative gap among the
+five Float64 cases was `4.2e-7` (`wide`), and `4.0e-7` for `float32`. The control ends
+`target_missed` (relative gap about `0.25` in repetition 1). Other dependency
+commits can give other values.
+
+The cases correspond to those of `legacy/full` as follows. The targets are the
+earlier ones.
+
+| Earlier case | Case now | Change |
+|---|---|---|
+| `lasso/lasso/dense-standardized` | `lasso/lasso/dense` | Inputs prepared as above instead of `intercept = true, standardize_x = true`. |
+| `lasso/lasso/wide`, `correlated`, `large` | the same ids | Inputs prepared as above. |
+| `lasso/lasso/gram-tall` | `lasso/lasso/tall` | The Gram option does not exist; the plain call. |
+| `lasso/lasso/float32` | the same id | Inputs prepared as above, then rounded to Float32. |
+| `controls/lasso/max-iter-1` | `controls/lasso/one-pass` | `CDSolver(maxpasses = 1)`; the solver's warning is silenced. |
+| `sparse-csc`, `weights-offset`, `sqrt_lasso`, `scaled_lasso`, `LassoPath`, `refit_lasso_path`, and every other group | none | The package has no such estimator, storage or option. |
 
 ## Certificates and targets
 
 `problems.jl` draws the inputs of each scenario from Xoshiro streams seeded by
-its key and the repetition, the same on every supported Julia version.
-`certificates.jl` states each problem from the estimator's documented objective,
-with its loadings, intercept, weights and offset computed from the inputs, and
-reads only the returned coefficients and intercepts on the original scale. For
-the adaptive procedure `rlasso` it also reads the penalty level and loadings of
-the final solve, so that certification is conditional on them. It never reads
-the package's gaps, KKT fields or `converged`.
+its key and the repetition, using scalar draws only.
+`certificates.jl` states the objective of `lasso`, `‖y - Xβ‖²/(2n) + λ‖β‖₁`, and
+computes the certificate from the arrays it is given: the prepared inputs, the
+penalty level and the coefficient vector that the case takes from the returned
+fit. The cases pass no other field of the fit, and nothing in the harness reads
+a field of ProximalBase or ProximalSolvers. The certificate is the relative
+duality gap `(P - D)/|P|`, where `P` is the objective at the returned
+coefficients and `D` is the dual value at the point `tθ`, `θ = r/n` for the
+residuals `r = y - Xβ`, with `t = min(1, λ/‖X'θ‖∞)` so that the point is dual
+feasible: `D = t y'θ - t² n‖θ‖²/2`. `D` is a lower bound on the minimum, so in
+exact arithmetic a nonoptimal point has a positive gap; the computed gap is
+clamped to zero when it is negative by less than a rounding bound, and a more
+negative one (a violation of weak duality) makes the case `uncertifiable`. For
+`λ = 0` the certificate is the KKT residual `‖X'r/n‖∞` of the least squares,
+relative to `max(1, ‖X'y‖∞/n)`, not a duality gap. `check_certificates.jl` tests it with
+analytic problems, problems whose solution is known by construction,
+nonoptimal points, weak duality, dual feasibility and nonfinite inputs, and
+runs the `dense` and `float32` cases and the control once against their targets.
 
-Most targets are thresholds on a relative duality gap, a stationarity residual
-or a coefficient error, at settings fixed per case in `cases.jl`; where the
-defaults stop short of the threshold (the path gap tolerance, the group lasso
-without orthonormalization, the smoothed quantile tolerance), the case tightens
-them and says why. The nonconvex `sparse_reduced_rank` has the target `record`:
-the certificate must be valid, and its value is recorded without a threshold.
-MCP and SCAD are certified as stationary points only. The selections of
-`knockoff_filter` and `stability_selection` have no certificate, but their
-post-processing (the knockoff+ threshold of the returned statistics, the
-frequencies of the returned selections) is checked exactly, at a threshold of
-1e-12. `post_lasso` must refit the requested columns, and `double_selection` is
-certified on its effect regression, both nuisance lassos and the union of their
-supports. A path certifies every returned level and reports the
-worst. `check_certificates.jl` tests each certificate with analytic problems,
-designed nonoptimal points, weak duality and dual feasibility; agreement with the
-package's own diagnostics is secondary.
+A coordinate-change test of the solver, such as `fit.result.converged`, is not
+an optimality certificate for this problem and decides no status.
 
 | Status | Meaning |
 |---|---|
-| `ok` | The certificate is valid and its value meets a threshold target (any value for `record`). |
+| `ok` | The certificate is valid and its value meets the threshold target. |
 | `target_missed` | The certificate is valid and its value exceeds the threshold. |
-| `incomplete` | A path returned fewer levels than requested. |
-| `uncertifiable` | The certificate is outside its domain or nonfinite, for example a square-root lasso with an exact fit. |
+| `uncertifiable` | The certificate is outside its domain or nonfinite. |
 | `error` | Building the inputs, the call or the certification throws. |
 | `timeout` | A compiled call took longer than `HDM_CASE_SECONDS`; the case stops after that call, which is not interrupted. |
 
 A case takes the most severe status of its observations, in the order `error`,
-`timeout`, `incomplete`, `uncertifiable`, `target_missed`. Only `ok` samples are
+`timeout`, `uncertifiable`, `target_missed`. Only `ok` samples are
 timing-eligible; failed samples are recorded and never filtered.
 `HDM_GROUPS=controls` checks this end to end: its case ends `target_missed`,
 with no timing-eligible sample, and the runner exits with 2.
 
 ## Compare revisions
 
-Keep one copy of this harness fixed and measure two checkouts with it, in two
-fresh environments. The second environment copies the manifest of the first, so
-every dependency other than HighDimensionalModels is identical; `setup.jl`
-fails if any other manifest entry changes. Interleave the repetitions in fresh
-processes, alternating which revision runs first:
+Keep one copy of this harness fixed and measure two HighDimensionalModels
+checkouts with it, in two fresh environments. The second environment copies the
+manifest of the first, so every dependency other than HighDimensionalModels is
+identical: the same ProximalBase and ProximalSolvers checkouts must be given
+to both, and `setup.jl` fails if any other manifest entry changes, including the
+path of either. Interleave the repetitions in fresh processes, alternating which
+revision runs first:
 
 ```sh
 before=/absolute/path/to/before
 after=/absolute/path/to/after
-julia benchmark/setup.jl "$before" benchmark/results/env-before
-julia benchmark/setup.jl "$after" benchmark/results/env-after benchmark/results/env-before
+julia benchmark/setup.jl "$before" benchmark/results/env-before "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT"
+julia benchmark/setup.jl "$after" benchmark/results/env-after "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT" \
+  benchmark/results/env-before
 runs=3
 for rep in $(seq 1 "$runs"); do
   if [ "$((rep % 2))" -eq 1 ]; then set -- before after; else set -- after before; fi
@@ -136,6 +179,9 @@ python3 benchmark/compare.py benchmark/results/before benchmark/results/after \
   benchmark/results/comparison --expected-runs "$runs"
 ```
 
+`compare.py` refuses series that differ in the commit or version of ProximalBase
+or ProximalSolvers; `summarize.py` summarizes each series separately.
+
 Choose `runs` from 1 to 10. Use the same suite, groups, sample and time limits,
 machine, and Julia and BLAS versions on both sides; different Julia versions need
 separate environments (`setup.jl` refuses a reference made by another version).
@@ -150,21 +196,28 @@ maximum bytes with their changes. Single-run ratios are exploratory, and an
 interval containing one is inconclusive. A case with a non-`ok` repetition is
 excluded from the ratios, with its reasons in the report. Invalid records,
 missing repetitions, unmatched cases, or differences in settings, catalog,
-data hashes, or dependency versions and tree hashes prevent a comparison. A
+data hashes, the commit or version of ProximalBase or ProximalSolvers, or the
+versions and tree hashes of the other dependencies prevent a comparison. A
 dependency tracked by path has an empty tree hash and is compared by version
-only, so the compared environments should use registered dependencies.
+only; the commits of ProximalBase and ProximalSolvers identify them. The
+tree of a dependency is identified by its commit only when it is clean, so a
+record whose ProximalBase or ProximalSolvers tree has tracked or untracked
+changes is invalid and cannot be compared. The measured HighDimensionalModels
+checkout may have changes; `package_hash` identifies its `Project.toml` and
+`src/`.
 
 ## Measurement and evidence
 
-The phase is always `call`: the warmed public call, including its own setup
-and result construction. Drawing the inputs, preparing their element type and
-storage, compilation, resets and certification are outside timing. The first
-call of a case compiles; it is certified but contributes no sample. Each sample
-then starts from fresh copies of the prepared inputs and a reset random number
-generator (the default one is reseeded too), times one call with `@timed`, and
-certifies that output. Sampling stops at `HDM_SAMPLES` or `HDM_SECONDS`, with
-at least three samples unless an error or timeout stops the case. The order of
-the cases is shuffled per repetition with a seeded generator.
+The phase is always `call`: the warmed public call `lasso(X, y, λ, solver)`,
+including its own setup and result construction. Drawing the inputs, preparing
+them, constructing the solver, compilation, resets and certification are
+outside timing. The first call of a case compiles; it is certified but
+contributes no sample. Each sample then starts from fresh copies of the prepared
+inputs, including the solver and its random number generator (the default
+generator is reseeded too), times one call with `@timed`, and certifies that
+output. Sampling stops at `HDM_SAMPLES` or `HDM_SECONDS`, with at least three
+samples unless an error or timeout stops the case. The order of the cases is
+shuffled per repetition with a seeded generator.
 
 Intervals describe variation across processes and input draws, including
 machine noise; they do not correct for correlated noise or multiple
@@ -190,18 +243,25 @@ nanoseconds and bytes, and round-trip floats:
 | `-profiles.txt` | Optional profiles, with `HDM_PROFILE_SECONDS > 0` |
 | `-metadata-start.toml`, `-metadata.toml` | Provenance at the start; the same with the final keys at the end |
 
-The metadata records the settings; the Julia, BLAS and CPU identity; the
-package path, commit and dirty status; SHA-1 hashes of the package's
-`Project.toml`, `src/` and `ext/` (`package_hash`) and of the Julia files of this
-folder (`harness_hash`); and a `[dependencies]` table with the version and tree
-hash of every package of the manifest that is not a standard library, other than
-HighDimensionalModels (a package tracked by path has an empty tree hash). The
-SHA-256 `data_hash` of a case covers its inputs and penalty levels. It is
-specific to the Julia version: the scenario inputs are identical on every
-version, but penalty levels computed from them can differ by one ulp. The final
-metadata adds `cases`, `ok_cases`, `nonok_cases`, `elapsed_s`, `maxrss_bytes` and
-`finished = true`; start metadata without it marks an interrupted process, which
-is kept and restarted in a fresh series.
+The metadata records the settings; the Julia, BLAS and CPU identity; and, for
+HighDimensionalModels (`package_*`), ProximalBase (`proximalbase_*`) and
+ProximalSolvers (`proximalsolvers_*`), the loaded path, the git commit of its
+checkout (`unavailable` where the path is not the root of a repository), whether
+the tree differs from it (`*_dirty`; untracked files count for ProximalBase and
+ProximalSolvers, tracked changes only for HighDimensionalModels) and the version.
+A record with `unavailable` or a dirty tree for ProximalBase or ProximalSolvers
+fails validation. It also records
+SHA-1 hashes of the package's `Project.toml` and `src/` (`package_hash`) and of
+the Julia files of this folder (`harness_hash`), and a `[dependencies]` table
+with the version and tree hash of every package of the manifest that is not a
+standard library, other than HighDimensionalModels (a package tracked by path
+has an empty tree hash). The SHA-256 `data_hash` of a case covers its scenario
+inputs and penalty level; for repetition 1 it is the same on Julia 1.10.13 and
+1.13.4 for every case, and `compare.py` requires equal hashes. The final metadata
+adds `cases`, `ok_cases`,
+`nonok_cases`, `elapsed_s`, `maxrss_bytes` and `finished = true`; start
+metadata without it marks an interrupted process, which is kept and restarted
+in a fresh series.
 
 The runner exits with 0 when every case is `ok`, 2 for complete records with
 non-`ok` cases, and 3 when it cannot start or write its records. Validation
@@ -219,19 +279,55 @@ series of `N` repetitions; `validate.py` and `summarize.py` also take
 `--versions VERSION ...`. `summarize.py` writes `SUMMARY.md` and `summary.csv`.
 Generated results, environments and profiles are ignored by Git.
 
+## CI integrity checks
+
+Linux CI runs these commands, in this order, from the package root, with
+`PROXIMALBASE_CHECKOUT` and `PROXIMALSOLVERS_CHECKOUT` the checkouts of the
+run's dependency commits (clean checkouts: `setup.jl` and the runner refuse a
+ProximalBase or ProximalSolvers tree with changes) and `julia` the Julia version
+of the job:
+
+```sh
+ENV_DIR="$RUNNER_TEMP/hdm-bench-env"
+OUT="$RUNNER_TEMP/hdm-bench-out"
+python3 benchmark/check_analysis.py
+julia benchmark/setup.jl "$PWD" "$ENV_DIR" "$PROXIMALBASE_CHECKOUT" "$PROXIMALSOLVERS_CHECKOUT"
+JULIA_NUM_THREADS=1 julia --project="$ENV_DIR" benchmark/check_certificates.jl
+export HDM_EXPECTED_PACKAGE_ROOT="$PWD" HDM_SAMPLES=5 HDM_SECONDS=0.2 JULIA_NUM_THREADS=1
+HDM_GROUPS=lasso HDM_OUTPUT="$OUT/lasso" julia --project="$ENV_DIR" benchmark/run.jl
+python3 benchmark/validate.py "$OUT/lasso" "$OUT/lasso.json"
+code=0
+HDM_GROUPS=controls HDM_OUTPUT="$OUT/controls" julia --project="$ENV_DIR" benchmark/run.jl > "$OUT/controls.log" || code=$?
+cat "$OUT/controls.log"
+[ "$code" -eq 2 ]
+grep -qx 'CASE controls/lasso/one-pass status=target_missed' "$OUT/controls.log"
+python3 benchmark/validate.py "$OUT/controls" "$OUT/controls.json"
+```
+
+In order: the Python controls of the record tools; the environment; the
+certificate controls; the quick lasso case, which must end `ok` (the runner exits
+with 0); the validation of its records; the control case, which must end
+`target_missed` (the runner exits with 2); and the validation of its records.
+Under `bash -e`, a failing command other than the guarded control run
+(`|| code=$?`) ends the sequence and fails the job.
+
+These checks test the correctness of the harness: the record tools, the
+certificate, the targets of the quick case and the control that must fail. No
+timing from a shared runner is a merge gate: the smoke run's samples are few and
+are not compared with anything. Formal performance studies are run only when
+authorized for a specific question, as described below.
+
 ## Studies and campaigns
 
 Studies beyond the harness, such as validation campaigns, comparisons with
 other packages and profiling studies, keep their records out of Git.
 
 - **The repository** keeps what detects regressions or informs users: tests
-  with small reference values; cases of this harness; for statistical
-  properties such as coverage or error rates, a few fixed-seed checks with
-  tolerance bands; and, for comparisons with other packages, summary tables in
-  the documentation, each built from a small committed file and stating the
-  package versions, the date and the hardware class. Timings are not kept as
-  regression baselines: compare the base and the head on one machine with
-  `compare.py`.
+  with small reference values; cases of this harness; and, for comparisons
+  with other packages, summary tables in the documentation, each built from a
+  small committed file and stating the package versions, the date and the
+  hardware class. Timings are not kept as regression baselines: compare the
+  base and the head on one machine with `compare.py`.
 - **The archive** of a study is one compressed file attached to the GitHub
   release `benchmark-evidence` of this repository, with its SHA-256 in the pull
   request. It holds the per-replication or per-sample results that the
@@ -247,22 +343,3 @@ aggregated tables and its report, removed before merge unless they belong in
 the repository. A pull request that has already committed larger records
 removes them and is squash-merged, so that they stay out of the history of
 master; its commits remain reachable from the pull request.
-
-## Historical studies
-
-The studies that preceded this harness, with their scripts, comparisons with
-other packages and run records, remain in the
-[snapshot of the retired benchmarks](https://github.com/mlakolar/HighDimensionalModels.jl/tree/abddaf56a790b86178de376b175a1185020c8381/benchmark).
-These measurements have no tool here:
-
-- the setup cost of cross-validation and GLM paths (#73),
-  [`path_setup_bench.jl`](https://github.com/mlakolar/HighDimensionalModels.jl/blob/abddaf56a790b86178de376b175a1185020c8381/benchmark/path_setup_bench.jl);
-- coordinate orders, momentum and Anderson acceleration,
-  [`order_anderson_bench.jl`](https://github.com/mlakolar/HighDimensionalModels.jl/blob/abddaf56a790b86178de376b175a1185020c8381/benchmark/order_anderson_bench.jl);
-- the Gram matrix against the residuals, which calibrated `gram = :auto`,
-  [`gram_bench.jl`](https://github.com/mlakolar/HighDimensionalModels.jl/blob/abddaf56a790b86178de376b175a1185020c8381/benchmark/gram_bench.jl);
-- the varying-coefficient models,
-  [`varying/`](https://github.com/mlakolar/HighDimensionalModels.jl/tree/abddaf56a790b86178de376b175a1185020c8381/benchmark/varying).
-
-The generators of the golden test data now live next to their fixtures, under
-`test/data/` and `test/golden/`.

@@ -1,9 +1,0 @@
-tasks,3
-shared,true
-row_norm,linf
-alpha,0.0
-intercept,true
-standardize_x,true
-task_weights,equal
-lambda_max,1.1868980360754653
-levels,2

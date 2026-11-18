@@ -1,157 +1,78 @@
-module StatsAPIEstimatorsTest
+module StatsAPITest
+# The StatsAPI methods of `LassoSolution`, the exported names and the printed form.
 
-using HighDimensionalModels, ProximalBase
-using LinearAlgebra, Random, SparseArrays, Statistics, Test
+using HighDimensionalModels, Test, LinearAlgebra, Random
+using ProximalSolvers: ProximalSolvers
 
-logistic(z) = 1 / (1 + exp(-z))
+function problem(T, seed, n, p)
+  rng = Xoshiro(seed)
+  X = randn(rng, T, n, p)
+  X, X[:, 1] .- T(0.5) .* X[:, 2] .+ T(0.3) .* randn(rng, T, n)
+end
 
-@testset "StatsAPI methods of the other estimators" begin
-  rng = Xoshiro(23)
-  n, p = 150, 12
-  X = randn(rng, n, p)
-  β = zeros(p); β[1:3] .= [1.0, -0.8, 0.6]
+solver(T) = CDSolver(order = :cyclic, momentum = false, tol = T === Float32 ? 1e-6 : 1e-10)
 
-  @testset "glm_lasso and GLMLassoPath" begin
-    y = Float64.(rand(rng, n) .< logistic.(0.3 .+ X * β))
-    for intercept in (true, false)
-      sol = glm_lasso(X, y, 0.02; intercept)
-      b = Vector(sol.x)
-      @test sol.hasintercept == intercept
-      @test coef(sol) isa SparseVector
-      @test Vector(coef(sol)) == (intercept ? [sol.intercept; b] : b)
-      η = sol.intercept .+ X * b
-      @test predict(sol, X; type = :link) ≈ η
-      @test predict(sol, X; type = :link) ≈ sol.linearpredictor
-      @test predict(sol, X) ≈ logistic.(η)                      # the response scale by default
-      @test fitted(sol) ≈ predict(sol, X)
-      @test nobs(sol) == n
-      @test dof(sol) == count(!iszero, b) + intercept
-      @test deviance(sol) == sol.deviance && nulldeviance(sol) == sol.nulldeviance
+@testset "StatsAPI methods" begin
+
+  @testset "exports" begin
+    @test Set(names(HighDimensionalModels)) ==
+          Set([:HighDimensionalModels, :lasso, :LassoSolution, :CDSolver, :coef, :predict, :residuals, :nobs])
+    # the four methods are those of StatsAPI, and CDSolver is the one of ProximalSolvers
+    for f in (coef, predict, residuals, nobs)
+      @test nameof(parentmodule(f)) === :StatsAPI
+      @test any(m -> m.sig <: Tuple{typeof(f), LassoSolution, Vararg}, methods(f))
     end
-    sol = glm_lasso(X, y, 0.02)
-    o = 0.1 .* randn(rng, n)
-    @test predict(sol, X; type = :link, offset = o) ≈ predict(sol, X; type = :link) .+ o
-    @test_throws ArgumentError predict(sol, X; type = :mean)
-    @test_throws DimensionMismatch predict(sol, X[:, 1:end-1])
-    @test_throws DimensionMismatch predict(sol, X; offset = o[1:end-1])
-
-    # Poisson: the means are exp(η); the Huber loss: η itself
-    counts = Float64.([rand(rng) < 0.5 ? 0 : rand(rng, 0:4) for _ in 1:n])
-    sp = glm_lasso(X, counts, 0.05, ProximalBase.Poisson())
-    @test predict(sp, X) ≈ exp.(predict(sp, X; type = :link))
-    sh = glm_lasso(X, X * β .+ randn(rng, n), 0.05, ProximalBase.Huber(1.0))
-    @test predict(sh, X) ≈ predict(sh, X; type = :link)
-    # a loss whose mean is not known has only the link scale
-    @test_throws ArgumentError HighDimensionalModels._inverselink(ProximalBase.SquaredHinge(), 0.0)
-
-    # gaptol = 0, for the comparison of two runs with different coordinate orders below
-    exact = CDOptions(; gaptol = 0)
-    path = GLMLassoPath(X, y, ProximalBase.Logistic(), exact; nλ = 15)
-    B = coef(path)
-    @test size(B) == (p + 1, length(path.λpath))
-    for k in eachindex(path.λpath)
-      @test coef(path, path.λpath[k]) == B[:, k]
-      @test Vector(B[:, k]) == [path.β0path[k]; Vector(path.βpath[k])]
-    end
-    λm = (path.λpath[4] + path.λpath[5]) / 2
-    @test Vector(coef(path, λm)) ≈ (Vector(B[:, 4]) + Vector(B[:, 5])) / 2
-    H = predict(path, X; type = :link)
-    @test size(H) == (n, length(path.λpath))
-    @test H[:, 6] ≈ path.β0path[6] .+ X * Vector(path.βpath[6])
-    @test predict(path, X) ≈ logistic.(H)
-    @test nobs(path) == n && nulldeviance(path) == path.nulldeviance
-    q = fit(GLMLassoPath, X, y, ProximalBase.Logistic(), exact; nλ = 15)
-    # the random coordinate orders come from the global generator, so compare to a tolerance
-    @test q.λpath == path.λpath && all(k -> isapprox(q.βpath[k], path.βpath[k]; atol = 1e-6), eachindex(q.λpath))
+    @test HighDimensionalModels.coef === coef
+    @test CDSolver === ProximalSolvers.CDSolver
   end
 
-  @testset "group_lasso and GroupLassoPath" begin
-    y = 0.5 .+ X * β .+ randn(rng, n)
-    groups = [1:3, 4:6, 7:9, 10:12]
-    for intercept in (true, false)
-      sol = group_lasso(X, y, 0.1, groups; intercept)
-      @test Vector(coef(sol)) == (intercept ? [sol.intercept; Vector(sol.x)] : Vector(sol.x))
-      @test predict(sol, X) ≈ sol.intercept .+ X * Vector(sol.x)
-      @test nobs(sol) == n && dof(sol) == nnz(sol.x) + intercept
-    end
-    @test_throws DimensionMismatch predict(group_lasso(X, y, 0.1, groups), X[:, 1:5])
-    exact = CDOptions(; gaptol = 0)
-    path = GroupLassoPath(X, y, groups, exact; nλ = 10)
-    B = coef(path)
-    @test size(B) == (p + 1, length(path.λpath))
-    @test all(k -> coef(path, path.λpath[k]) == B[:, k], eachindex(path.λpath))
-    @test predict(path, X)[:, 5] ≈ path.β0path[5] .+ X * Vector(path.βpath[5])
-    @test nobs(path) == n
-    q = fit(GroupLassoPath, X, y, groups, exact; nλ = 10)
-    @test q.λpath == path.λpath && all(k -> isapprox(q.βpath[k], path.βpath[k]; atol = 1e-6), eachindex(q.λpath))
+  @testset "$T" for T in (Float32, Float64)
+    X, y = problem(T, 1, 30, 5)
+    fit = lasso(X, y, T(0.1), solver(T))
+    b = coef(fit)
+    @test b isa Vector{T} && b === fit.coefficients && length(b) == 5
+
+    @test residuals(fit) === fit.residuals
+    @test residuals(fit) == y - X * b                            # at the returned point
+    @test nobs(fit) == 30 && nobs(fit) isa Int
+
+    @test predict(fit, X) isa Vector{T} && predict(fit, X) == X * b
+    @test predict(fit, X) + residuals(fit) ≈ y rtol = 8 * eps(T)
+
+    # new data: a different number of rows, p columns
+    Xnew = randn(Xoshiro(2), T, 7, 5)
+    @test predict(fit, Xnew) == Xnew * b && length(predict(fit, Xnew)) == 7
+    @test predict(fit, Xnew[1:1, :]) == Xnew[1:1, :] * b
+    @test predict(fit, zeros(T, 0, 5)) == T[]
+    @test predict(fit, view(Xnew, 2:4, :)) == Xnew[2:4, :] * b       # any AbstractMatrix
+    @test predict(fit, Float64.(Xnew)) isa Vector{Float64}           # promoted, as in X * b
+    @test predict(fit, Float64.(Xnew)) ≈ Float64.(Xnew) * Float64.(b)
+
+    # a wrong number of columns
+    @test_throws DimensionMismatch predict(fit, randn(Xoshiro(3), T, 7, 4))
+    @test_throws DimensionMismatch predict(fit, randn(Xoshiro(3), T, 7, 6))
+    @test_throws DimensionMismatch predict(fit, zeros(T, 3, 0))
+    @test_throws MethodError predict(fit, randn(Xoshiro(3), T, 5))   # a vector is not a design matrix
+
+    # the methods read the stored fields: a fit with no nonzero coefficient
+    f0 = lasso(X, y, T(1e3), solver(T))
+    @test iszero(coef(f0)) && residuals(f0) == y && predict(f0, Xnew) == zeros(T, 7)
   end
 
-  @testset "multi_lasso and MultiLassoPath" begin
-    Y = [X * β X * reverse(β)] .+ randn(rng, n, 2) .+ [1.0 -1.0]
-    for intercept in (true, false)
-      sol = multi_lasso(X, Y, 0.1; intercept)
-      C = coef(sol)
-      @test C isa SparseMatrixCSC
-      @test Matrix(C) == (intercept ? [transpose(sol.intercept); Matrix(sol.B)] : Matrix(sol.B))
-      @test predict(sol, X) ≈ transpose(sol.intercept) .+ X * Matrix(sol.B)
-      @test nobs(sol) == n && dof(sol) == nnz(sol.B) + 2intercept
-    end
-    path = MultiLassoPath(X, Y; nλ = 10)
-    Cs = coef(path)
-    @test length(Cs) == length(path.λpath)
-    @test all(k -> coef(path, path.λpath[k]) == Cs[k], eachindex(path.λpath))
-    λm = (path.λpath[3] + path.λpath[4]) / 2
-    @test Matrix(coef(path, λm)) ≈ (Matrix(Cs[3]) + Matrix(Cs[4])) / 2
-    P = predict(path, X)
-    @test P[4] ≈ transpose(path.β0path[4]) .+ X * Matrix(path.Bpath[4])
-    @test nobs(path) == n
-    q = fit(MultiLassoPath, X, Y; nλ = 10)
-    @test q.λpath == path.λpath && all(k -> isapprox(q.Bpath[k], path.Bpath[k]; atol = 1e-6), eachindex(q.λpath))
-  end
-
-  @testset "rlasso, post_lasso and double_selection" begin
-    y = 0.5 .+ X * β .+ randn(rng, n)
-    sol = rlasso(X, y)
-    @test Vector(coef(sol)) == [sol.intercept; Vector(sol.x)]
-    @test predict(sol, X) ≈ y .- residuals(sol)
-    @test nobs(sol) == n && dof(sol) == length(sol.selected) + 1
-    @test deviance(sol) ≈ sum(abs2, residuals(sol))
-    @test length(coef(rlasso(X, y; intercept = false))) == p
-
-    pl = post_lasso(X, y, sol)
-    S = pl.selected
-    @test Vector(coef(pl)) == [pl.intercept; Vector(pl.x)]
-    @test Vector(stderror(pl)) == [pl.se_intercept; Vector(pl.se)]
-    V = vcov(pl)
-    @test V isa SparseMatrixCSC && size(V) == (p + 1, p + 1)
-    @test Matrix(V[[1; S .+ 1], [1; S .+ 1]]) == pl.vcov
-    @test sqrt.(diag(Matrix(V))) ≈ Vector(stderror(pl))
-    ci = confint(pl)
-    z = 1.959963984540054
-    @test ci[:, 1] ≈ Vector(coef(pl)) .- z .* Vector(stderror(pl))
-    @test ci[:, 2] ≈ Vector(coef(pl)) .+ z .* Vector(stderror(pl))
-    @test all(iszero, ci[setdiff(2:p+1, S .+ 1), :])
-    @test predict(pl, X) ≈ y .- residuals(pl)
-    @test nobs(pl) == n && dof(pl) == length(S) + 1 && deviance(pl) ≈ sum(abs2, residuals(pl))
-    pn = post_lasso(X, y, sol; intercept = false)
-    @test length(coef(pn)) == p && size(vcov(pn)) == (p, p)
-    @test Matrix(vcov(pn)[S, S]) == pn.vcov
-
-    d = X[:, 1] .+ randn(rng, n)
-    yd = 0.5 .* d .+ X * β .+ randn(rng, n)
-    te = double_selection(yd, d, X)
-    @test coef(te) == [te.estimate] && stderror(te) == [te.se] && vcov(te) == fill(te.se^2, 1, 1)
-    @test vec(confint(te)) ≈ collect(te.ci)
-    @test confint(te; level = 0.9)[2] - confint(te; level = 0.9)[1] < te.ci[2] - te.ci[1]
-    @test nobs(te) == n
-    @test_throws ArgumentError confint(te; level = 1.5)
-  end
-
-  @testset "fit(CVLassoPath, ...)" begin
-    y = X * β .+ randn(rng, n)
-    a = fit(CVLassoPath, X, y; nfolds = 5, nλ = 20, rng = Xoshiro(3))
-    b = CVLassoPath(X, y; nfolds = 5, nλ = 20, rng = Xoshiro(3))
-    @test a.λpath == b.λpath && a.cvm == b.cvm && a.λ1se == b.λ1se
+  @testset "show, $T" for T in (Float32, Float64)
+    X, y = problem(T, 4, 20, 3)
+    fit = lasso(X, y, T(0.1), solver(T))
+    s = sprint(show, fit)
+    nz = count(!iszero, coef(fit))
+    @test startswith(s, "LassoSolution: 3 coefficients, $nz nonzero, λ = $(T(0.1)), 20 observations;")
+    @test occursin("not an optimality certificate", s)
+    @test occursin("met after $(fit.result.passes) passes", s) && !occursin("not met", s)
+    @test s == string(fit) == repr(MIME("text/plain"), fit)
+    @test count(==('\n'), s) == 1
+    # a run stopped at maxpasses reports that the test was not met
+    stopped = @test_logs (:warn,) lasso(X, y, T(0.01), CDSolver(order = :cyclic, momentum = false, tol = T === Float32 ? 1e-6 : 1e-10, maxpasses = 1))
+    s = sprint(show, stopped)
+    @test occursin("not met after 1 passes", s)
   end
 end
 

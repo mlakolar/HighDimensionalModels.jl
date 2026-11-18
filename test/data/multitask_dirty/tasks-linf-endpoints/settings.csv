@@ -1,7 +1,0 @@
-tasks,3
-shared,false
-shared_norm,linf
-intercept,true
-standardize_x,false
-task_weights,equal
-levels,2

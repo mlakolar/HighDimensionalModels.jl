@@ -1,7 +1,0 @@
-tasks,3
-shared,false
-shared_norm,l2
-intercept,false
-standardize_x,true
-task_weights,equal
-levels,1

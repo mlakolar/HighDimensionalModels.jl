@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 
 from compare import FIELDS, compare
 from summarize import mean_interval, summarize
-from validate import HEADERS, SERIES_SETTINGS, STATUSES, records, validate
+from validate import HEADERS, SERIES_SETTINGS, SOURCES, STATUSES, records, validate
 
 
 VERSION = "1.10.0"
@@ -31,9 +31,10 @@ FIXTURE_HEADERS = {
     "errors": "id rep status exception stack".split(),
 }
 DEPENDENCIES = {
-    "HiGHS": dict(version="1.9.0", tree_hash="1" * 40),
-    "ProximalBase": dict(version="0.5.4", tree_hash="d" * 40),
-    "ProximalSolvers": dict(version="0.2.0", tree_hash="2" * 40),
+    "StatsAPI": dict(version="1.8.0", tree_hash="1" * 40),
+    # Packages tracked by path have no tree hash.
+    "ProximalBase": dict(version="0.6.0", tree_hash=""),
+    "ProximalSolvers": dict(version="0.3.2", tree_hash=""),
 }
 
 
@@ -122,7 +123,11 @@ def fixture(folder, factor=4, runs=3, allocated=0, cases=(DEFAULT_CASE,), status
         meta = dict(
             julia=version, rep=rep, suite="quick", groups="lasso", harness_hash="a" * 40,
             package_path="/synthetic/package", package_sha="b" * 40, package_dirty=False,
-            package_hash="c" * 40, expected_package_root="/synthetic/package",
+            package_version="0.2.0", package_hash="c" * 40, expected_package_root="/synthetic/package",
+            proximalbase_path="/synthetic/ProximalBase", proximalbase_sha="d" * 40,
+            proximalbase_dirty=False, proximalbase_version="0.6.0",
+            proximalsolvers_path="/synthetic/ProximalSolvers", proximalsolvers_sha="e" * 40,
+            proximalsolvers_dirty=False, proximalsolvers_version="0.3.2",
             julia_threads=1, blas_threads=1, blas="control", cpu="control", cpu_model="control",
             samples_target=5, seconds_limit=1.0, case_seconds=60.0, profile_seconds=0.0,
             seed_scheme="control", job_id="none",
@@ -507,23 +512,40 @@ def integrity_controls(root):
                      "missing metadata keys")
     invalid_mutation(folder, lambda: edit_meta(folder, "julia_threads", 2), "one Julia and one BLAS thread")
     invalid_mutation(folder, lambda: edit_meta(folder, "blas_threads", 2), "one Julia and one BLAS thread")
-    for key in ("harness_hash", "package_hash", "package_sha"):
+    for key in ("harness_hash", "package_hash", "package_sha", "proximalbase_sha", "proximalsolvers_sha"):
         invalid_mutation(folder, lambda key=key: edit_meta(folder, key, "bad"), "provenance hash")
-    invalid_mutation(folder, lambda: edit_meta(folder, "package_dirty", "no"), "package_dirty must be boolean")
+    # An unavailable commit of ProximalBase or ProximalSolvers is invalid.
+    for key in ("proximalbase_sha", "proximalsolvers_sha"):
+        invalid_mutation(folder, lambda key=key: edit_meta(folder, key, "unavailable"), "provenance hash")
+    # A dirty ProximalBase or ProximalSolvers tree is invalid; the measured package may be dirty.
+    for key in SOURCES:
+        invalid_mutation(folder, lambda key=key: edit_meta(folder, f"{key}_dirty", True),
+                         f"{key}_dirty must be false")
+    edit_meta(folder, "package_dirty", True)
+    assert validate(folder, 3)["valid"]
+    edit_meta(folder, "package_dirty", False)
+    for key in ("package", "proximalbase", "proximalsolvers"):
+        invalid_mutation(folder, lambda key=key: edit_meta(folder, f"{key}_dirty", "no"),
+                         f"{key}_dirty must be boolean")
+        for field in ("path", "version"):
+            invalid_mutation(folder, lambda key=key, field=field: edit_meta(folder, f"{key}_{field}", ""),
+                             f"malformed provenance field: {key}_{field}")
+    invalid_mutation(folder, lambda: edit_metadata(folder, lambda meta: meta.pop("proximalsolvers_sha")),
+                     "missing metadata keys")
     invalid_mutation(folder, lambda: edit_metadata(folder, lambda meta: meta.pop("dependencies")),
                      "missing metadata keys")
     invalid_mutation(folder, lambda: edit_meta(folder, "dependencies", {}), "malformed dependencies")
-    invalid_mutation(folder, lambda: edit_metadata(folder, lambda meta: meta["dependencies"]["HiGHS"].pop(
+    invalid_mutation(folder, lambda: edit_metadata(folder, lambda meta: meta["dependencies"]["StatsAPI"].pop(
         "tree_hash")), "malformed dependencies")
-    invalid_mutation(folder, lambda: edit_dependency(folder, "HiGHS", "tree_hash", "bad"),
+    invalid_mutation(folder, lambda: edit_dependency(folder, "StatsAPI", "tree_hash", "bad"),
                      "malformed dependencies")
-    invalid_mutation(folder, lambda: edit_dependency(folder, "HiGHS", "version", ""),
+    invalid_mutation(folder, lambda: edit_dependency(folder, "StatsAPI", "version", ""),
                      "malformed dependencies")
     invalid_mutation(folder, lambda: edit_metadata(
-        folder, lambda meta: meta["dependencies"]["HiGHS"].update(version="1.9.1"),
+        folder, lambda meta: meta["dependencies"]["StatsAPI"].update(version="1.9.1"),
         pattern="*-rep01-metadata-start.toml"), "start and final metadata disagree")
     # Dependency identity is part of the series: no version or tree hash may change.
-    for field, value in (("version", "0.5.5"), ("tree_hash", "e" * 40)):
+    for field, value in (("version", "0.6.1"), ("tree_hash", "e" * 40)):
         message = "dependency versions or tree hashes changed within a Julia version"
         invalid_mutation(folder, lambda field=field, value=value: edit_dependency(
             folder, "ProximalBase", field, value, rep=2), message)
@@ -532,6 +554,11 @@ def integrity_controls(root):
                      "dependency versions or tree hashes changed within a Julia version")
     invalid_mutation(folder, lambda: edit_meta(folder, "package_hash", "e" * 40, rep=2),
                      "series settings changed")
+    # The sources of ProximalBase and ProximalSolvers are constant within a series.
+    for key, value in (("proximalbase_sha", "f" * 40), ("proximalbase_version", "0.6.1"),
+                       ("proximalsolvers_sha", "f" * 40), ("proximalsolvers_version", "0.3.3")):
+        invalid_mutation(folder, lambda key=key, value=value: edit_meta(folder, key, value, rep=2),
+                         "series settings changed")
     invalid_mutation(folder, lambda: edit_rows(folder, "metrics", lambda rows: rows.append(rows[0])),
                      "metrics do not cover")
     invalid_mutation(folder, lambda: edit_rows(folder, "metrics", lambda rows: rows[0].update(rep=9)),
@@ -561,7 +588,7 @@ def integrity_controls(root):
                      "malformed data_hash")
     invalid_mutation(folder, lambda: edit_rows(folder, "catalog", lambda rows: rows[0].update(scenario="control-other"), rep=2),
                      "catalog changed")
-    invalid_mutation(folder, lambda: edit_rows(folder, "catalog", lambda rows: rows[0].update(estimator="sqrt_lasso")),
+    invalid_mutation(folder, lambda: edit_rows(folder, "catalog", lambda rows: rows[0].update(estimator="other")),
                      "catalog id disagrees")
     invalid_mutation(folder, lambda: edit_rows(folder, "catalog", lambda rows: rows[0].update(scenario="")),
                      "missing scenario")
@@ -598,10 +625,15 @@ def compatibility_controls(root):
     edit_meta(after, "package_hash", "e" * 40)
     edit_meta(after, "package_sha", "f" * 40)
     edit_meta(after, "package_dirty", True)
+    edit_meta(after, "package_version", "0.2.1")
+    # The paths of the dependencies do not identify them; the commits do.
+    edit_meta(after, "proximalbase_path", "/elsewhere/ProximalBase")
     assert len(compare(before, after, root / "changed-package", 3)) == 1
-    replacements = dict(suite="extended", groups="glm,lasso", harness_hash="e" * 40,
+    replacements = dict(suite="extended", groups="lasso,controls", harness_hash="e" * 40,
                         blas="other", cpu_model="other", samples_target=10, seconds_limit=2.0,
-                        case_seconds=30.0, profile_seconds=1.0, seed_scheme="other")
+                        case_seconds=30.0, profile_seconds=1.0, seed_scheme="other",
+                        proximalbase_sha="f" * 40, proximalbase_version="0.6.1",
+                        proximalsolvers_sha="f" * 40, proximalsolvers_version="0.3.3")
     assert set(replacements) == set(SERIES_SETTINGS) - {
         "package_hash", "julia_threads", "blas_threads", "dependencies"}
     for key, value in replacements.items():
@@ -611,8 +643,17 @@ def compatibility_controls(root):
         assert validate(folder, 3)["valid"]
         message = expect_error(lambda: compare(before, folder, root / f"reject-{key}", 3), "series settings differ")
         assert key in message
+    # Two series from the same dirty ProximalBase or ProximalSolvers commit are invalid, so that
+    # no comparison includes them.
+    for key in SOURCES:
+        folder = root / f"dirty-{key}"
+        fixture(folder)
+        edit_meta(folder, f"{key}_dirty", True)
+        assert not validate(folder, 3)["valid"]
+        message = expect_error(lambda: compare(folder, folder, root / f"reject-dirty-{key}", 3), "Invalid results")
+        assert f"{key}_dirty must be false" in message
     # A consistent series with other dependencies is valid but not comparable.
-    dependency_changes = (("ProximalBase", "version", "0.5.5"), ("HiGHS", "tree_hash", "e" * 40),
+    dependency_changes = (("ProximalBase", "version", "0.6.1"), ("StatsAPI", "tree_hash", "e" * 40),
                           ("Extra", "version", "1.0.0"))
     for package, field, value in dependency_changes:
         folder = root / f"dependency-{package}-{field}"
