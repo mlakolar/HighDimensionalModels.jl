@@ -88,10 +88,12 @@ adds the ridge term. Any other value, including a value that is not a `Real`, th
   alone and an `ArgumentError` says so. Otherwise the penalty is ProximalBase's
   `ElasticNet(λ₁, λ₂)` with `λ₁ = λ_T * α` and `λ₂ = λ_T * (1 - α)`, computed in `T`, so that
   `fit.λ * fit.alpha` is `λ₁` and `fit.λ * (1 - fit.alpha)` is `λ₂`. `λ = 0` gives least squares.
-  With `α < 1` in `T`, `lasso` itself refuses a negative `λ` (`λ < 0`; `-0.0` is not negative) with an
-  `ArgumentError` that names `λ`, also when it would round to `-0.0` or `0` in `T`; a `NaN`, an
-  infinite `λ`, and a `λ` whose levels `λ₁`, `λ₂` are not representable in `T` are refused by
-  ProximalBase and ProximalSolvers on those levels.
+  With `α < 1` in `T`, `lasso` itself refuses `λ < 0`, including `-Inf` (`-0.0` is not negative),
+  with an `ArgumentError` that names `λ`, also when it would round to `-0.0` or `0` in `T`, and
+  refuses `λ > 0` with `λ_T = 0` or `λ₁ = 0` (the ridge case above). A `NaN`, a `+Inf`, and a finite
+  `λ` that is `Inf` in `T` reach `ElasticNet(λ₁, λ₂)` as levels that are `NaN` or `Inf`, and
+  ProximalBase and ProximalSolvers refuse them there; with `α = 1` in `T` `lasso` adds no check on
+  `λ`, and those two packages check it.
 - **The solve.** The same `CDSolver` solves the problem on the same transformed data as for the
   lasso (`Z`, `ỹ`, or `X`, `y` themselves with `intercept` and `standardize_x` both `false`), with `ElasticNet(λ₁, λ₂)` in
   place of the ℓ₁ penalty, and the back-transformation and residuals are those of the lasso.

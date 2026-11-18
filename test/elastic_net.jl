@@ -471,7 +471,7 @@ setprecision(BigFloat, 256) do
       @test f.coefficients ≈ l.coefficients atol = 1e-5
       @test f.coefficients ≈ T[1] atol = 1e-5
     end
-    # a NaN or an infinite λ is still refused downstream, and a positive level that converts to 0 by HDM
+    # -Inf is refused by the check of λ < 0; NaN and +Inf reach the penalty's levels and are refused downstream
     for λ in (NaN, Inf, -Inf)
       @test_throws ArgumentError lasso(X, y, λ, cyc(T); alpha = 0.5, kw...)
     end

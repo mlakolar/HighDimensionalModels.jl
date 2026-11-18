@@ -84,12 +84,14 @@ all `j`: the objective is `‖y - Xβ‖² / (2n) + λ‖β‖₁`, and the desc
     `λ₂ = λ_T * (1 - α)` computed in `T`, so that `fit.λ * fit.alpha` is `λ₁` and
     `fit.λ * (1 - fit.alpha)` is `λ₂`. With `λ = 0` this is least squares.
 
-  With `α < 1` in `T`, this function checks `λ` itself before converting it: a negative `λ`
-  (`λ < 0`, which excludes `-0.0`) throws an `ArgumentError` that names `λ` and says it must be
-  nonnegative, also when it would round to `-0.0` or `0` in `T`. A `NaN`, an infinite `λ`, and a
-  `λ` whose levels `λ₁`, `λ₂` are not representable in `T` are refused by ProximalBase and
-  ProximalSolvers on those two levels, and their errors are not altered. With `α = 1` in `T` this
-  function adds no check on `λ`: see the lasso checks below.
+  With `α < 1` in `T`, this function checks `λ` before converting it: `λ < 0`, including `-Inf`
+  (`-0.0` is not negative), throws an `ArgumentError` that names `λ` and says it must be
+  nonnegative, also when it would round to `-0.0` or `0` in `T`. After the conversion, `λ > 0` with
+  `λ_T = 0` or `λ₁ = 0` throws the `ArgumentError` about a ridge penalty alone, given above. A
+  `NaN`, a `+Inf`, and a finite `λ` that is `Inf` in `T` reach `ElasticNet(λ₁, λ₂)` as levels that
+  are `NaN` or `Inf`, and ProximalBase and ProximalSolvers refuse them there; their errors are not
+  altered. With `α = 1` in `T` this function adds no check on `λ`: ProximalBase and ProximalSolvers
+  check it, as described below.
 
   No agreement with glmnet is claimed: glmnet scales `y` internally, which changes the ridge part
   unless `sd(y) = 1`.
