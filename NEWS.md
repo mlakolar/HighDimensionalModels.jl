@@ -23,7 +23,8 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   coordinate descent. For disjoint nonempty `groups` that contain all the columns (contiguous or
   not) and weights `wₖ` (default `√|Gₖ|`), it minimizes `‖y - β₀1 - Xβ‖² / (2n) +
   λ Σₖ wₖ‖X̃_{Gₖ}β_{Gₖ}‖ / √n` with `:orthonormal` (the penalty is on the contribution of each group to the
-  fitted values, which makes the fit independent of the basis of a group), where `X̃` has centred columns
+  fitted values, so the fit depends on a group through its column span and is unchanged, up to rounding and the solver's tolerance, by an
+  invertible recombination of its columns when the rank rule retains the same span), where `X̃` has centred columns
   with an intercept, or `‖y - β₀1 - Xβ‖² / (2n) + λ Σₖ wₖ‖β_{Gₖ}‖` with `:none`. With `:orthonormal` each
   group is factored by a pivoted QR in `T`; the rank is the number of diagonal entries of `R` above the
   tolerance `c√max(n, |G|) eps(T)|R₁₁|` (`c` is a provisional constant), the columns the rank decision leaves

@@ -178,7 +178,8 @@ end
 # ---- group lasso (#224) ----
 # The group lasso on the raw inputs of the scenario "groups-200x60" (twelve groups of five columns), with an
 # intercept and the default weights √|G|, at the level λ = 0.1 λmax. Certified at the stored intercept and
-# coefficients by `group_gap`, a duality gap on the full column span of each group.
+# coefficients by `group_gap`, a duality gap (with `orthonormal`, on the projector onto the full column span of
+# each group).
 
 # The target of the group cases, which their certificate also needs to decide whether the rounding of its
 # bounds could change the verdict
@@ -211,8 +212,8 @@ end
 
 # The smallest λ with a zero group lasso solution, for weights above zero: maxₖ ‖P_Gₖ ỹ‖/(√n wₖ) with
 # `orthonormal`, P_G the projector on the span of the centred columns of the group, and maxₖ ‖X̃_Gₖ'ỹ‖/(n wₖ)
-# without. The sums and the elimination add in a fixed order, so that λ does not depend on the BLAS or the
-# Julia version.
+# without. The sums and the elimination add in a fixed order, with no BLAS or LAPACK call; the values for
+# repetitions 1 to 3 of the scenario are bit-identical on Julia 1.10.13 and 1.13.4.
 function group_lambda_max(X, y, groups, weights; orthonormal)
   n = size(X, 1)
   ỹ = y .- sample_mean(y)
@@ -244,7 +245,7 @@ function group_cases!(catalog)
                                         orthonormal = s.orthonormal, target = GROUP_TARGET)
   # The tolerance of the solver is explicit. In a pilot on repetitions 1 to 10 (Julia 1.13.4) the stopping
   # tolerance 1e-7 left relative gaps of at most 6.3e-8 with orthonormalization; without it 1e-7 left up to 6.9e-7
-  # (about 3 times the tolerance) and 1e-8 left at most 7.3e-8.
+  # (6.9 times the tolerance) and 1e-8 left at most 7.3e-8 (7.3 times).
   add_case!(catalog, "group", "group_lasso", "orthonormal"; scenario = "groups-200x60",
     measure = MEASURE.gap, target = GROUP_TARGET,
     build = p -> group_inputs(p; orthonormal = true, tol = 1e-7), call = group_call,

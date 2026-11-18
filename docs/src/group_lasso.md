@@ -32,13 +32,23 @@ coordinate descent (`CDSolver`), unchanged. The groups need not be contiguous or
 ## The orthonormal interpretation
 
 With `standardize = :orthonormal` (the default) the penalty is on the contribution of each group to
-the fitted values, `‖X̃_G β_G‖/√n`, and not on the norm of its coefficients. The fit then does not
-depend on the basis of a group. If the columns `X̃_G` are replaced by `X̃_G M` for an invertible matrix `M`
-with as many columns (a rescaling of a column, or a recombination of the columns of the group), then
-`β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty, so the estimate of the fitted values is
-unchanged, in exact arithmetic. In floating point the statement holds where the computed rank of the group
-(below) is the same before and after the transformation and `M` is well conditioned; the tests assert it
-under those two conditions. The weights are part of the objective: with the default weights, adding a
+the fitted values, `‖X̃_G β_G‖/√n`, and not on the norm of its coefficients, so it depends on a group through
+its column span. If the columns `X̃_G` are replaced by `X̃_G M` for an invertible matrix `M` with as many
+columns (a rescaling of a column, or a recombination of the columns of the group), the span is the same, and
+`β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty: in exact arithmetic the minimum and the
+fitted values do not change.
+
+In floating point the fit uses the span of the `r` columns that the rank rule (below) retains, and the fitted
+values are the same, up to rounding and the stopping tolerance of the solver, when the retained spans of `X̃_G` and `X̃_G M` are the same subspace. That
+holds when the rule retains all the columns of the group before and after the transformation and `M` is well
+conditioned, and when the directions it drops are at rounding level in both. Equal ranks below the number of
+columns do not suffice: when a group has a direction near the tolerance, the transformation can change which
+directions are retained, and the fits differ. For example, three centred orthogonal columns with norms `1`,
+`1.2τ` and `0.8τ` (`τ` the tolerance below, for `|R₁₁| = 1`) retain the second column, and after rescaling the
+columns by `1`, `0.5` and `2` (condition number 4) they retain the third; both have rank 2, and at `λ = 0` the
+fitted values for `y` equal to the second column are `y` and `0`. The tests assert invariance after checking that
+the computed ranks agree, that `M` is well conditioned and that the projectors on the retained spans agree.
+The weights are part of the objective: with the default weights, adding a
 redundant column to a group changes its size and so its weight `wₖ = √|Gₖ|`, and with it the fit; to compare
 a group with and without a column, give the same weights.
 
@@ -47,10 +57,28 @@ intercept) are factored by a pivoted QR in the element type `T`, `X̃_G[:, P] = 
 rank (below). The matrix `Z_G = √n Q[:, 1:r]` has `Z_G'Z_G/n = I` up to rounding, so with
 `θ_G = R̃β_G[P[1:r]]` and `R̃ = R[1:r, 1:r]/√n` the penalty is `λ wₖ‖θ_G‖`, and the objective is the group lasso
 on `Z` with the response `ỹ` (`y` centred with an intercept):
-`‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖`. The block steps of the solver are exact on `Z` up to rounding.
+`‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖`. The columns of a block of `Z` are orthonormal, so the block problem has the
+same curvature in all directions. ProximalSolvers' block step uses a bound on the curvature of the block, and
+the bound exceeds the curvature by a margin that depends on `n` and `eps(T)`, so a pass moves a block toward the
+minimizer of its problem and need not solve it, and the solver iterates until its change test is met or `maxpasses`
+is exhausted. For a
+one-column group of ones with `n = 10⁶` in `Float32`, `λ = 0.25` and no intercept, whose minimizer is `0.75`:
+
+```@example group
+using HighDimensionalModels
+n1 = 10^6
+x1, y1 = ones(Float32, n1, 1), ones(Float32, n1)
+one_pass = Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+    group_lasso(x1, y1, 0.25f0, [1:1], CDSolver(order = :cyclic, tol = 1e-6, maxpasses = 1); intercept = false)
+end
+converged = group_lasso(x1, y1, 0.25f0, [1:1], CDSolver(order = :cyclic, tol = 1e-6); intercept = false)
+(one_pass = one_pass.coefficients[1], converged = converged.coefficients[1], passes = converged.result.passes)
+```
+
 The coefficients are mapped back by `β_G[P[1:r]] = R̃ \ θ_G`, with `β = 0` on the columns `P[r+1:end]` of the
 group, and `β₀ = ȳ - x̄ᵀβ`. With `standardize = :none` the solver sees the (centred) columns as given and
-`β = θ`; scaling or recombining the columns of a group then changes the estimate.
+`β = θ`; scaling the columns of a group, or recombining them by a matrix that is not orthogonal, can then change the
+estimate.
 
 ## Groups and weights
 
@@ -82,12 +110,12 @@ triangular factor of its pivoted QR above the tolerance
 
 where `|R₁₁|` is the largest column norm (the first diagonal entry of a pivoted QR) and `c` is the constant
 `HighDimensionalModels.RANK_TOLERANCE_C`, a provisional `10`. The tolerance is one function of the
-package (`rank_tolerance`). A group of columns that are linear combinations of one another has rank
-below `m`: the columns `P[r+1:end]` get the coefficient `0`, and the others carry the
+package (`rank_tolerance`). A group in which a column is a combination of the others to the rounding of the data
+has computed rank below `m`: the columns `P[r+1:end]` get the coefficient `0`, and the others carry the
 fit of the group. Pivoted QR does not decide which column of a redundant set is dropped, so a dependent column
-added to a group need not be the one with the zero coefficient; the fitted values and the contribution
-`X̃_G β_G` of the group do not depend on that choice up to rounding, and the number of nonzero coefficients of the group is at
-most its rank.
+added to a group need not be the one with the zero coefficient; when the dependence holds to rounding, the fitted
+values and the contribution `X̃_G β_G` of the group do not depend on that choice up to rounding, and the number of
+nonzero coefficients of the group is at most its rank.
 
 A group of rank `0` (zero columns, or constant columns with an intercept) stays in the fit as one column
 of zeros, which the solver keeps at zero, so the groups of the fit are the groups given, and
@@ -97,8 +125,8 @@ its coefficients are `0`. A design in which all the groups have rank `0` returns
 ## Example: a categorical predictor coded by dummy columns
 
 A categorical predictor with four levels, coded by one dummy column per level, is one group. With an
-intercept the four centred dummy columns sum to zero, so the group has rank 3 and the fit drops one
-coefficient.
+intercept the four centred dummy columns sum to zero up to rounding, so the group has computed rank 3 and the fit
+drops one coefficient.
 
 ```@example group
 using HighDimensionalModels, Random
@@ -123,8 +151,9 @@ fit
 ```
 
 The default weight of the dummy group is `√4 = 2`, from its four columns. Which dummy gets the zero
-coefficient depends on the pivoting. The fit does not depend on the choice of the reference level, so
-leaving one dummy out (three columns) gives the same fitted values when the weight of the group is the same:
+coefficient depends on the pivoting. The fitted values do not depend on the choice of the reference level, up to rounding and
+the stopping tolerance, so leaving one dummy out (three columns) gives the same fitted values when the weight of the
+group is the same:
 
 ```@example group
 fit3 = group_lasso([D[:, 2:4] z], y, 0.05, [1:3, [4], [5], [6]], solver; groupweights = [2.0, 1, 1, 1])
@@ -136,10 +165,18 @@ maximum(abs, predict(fit, X) - predict(fit3, [D[:, 2:4] z]))
 The result of the solver is `fit.result`, a `ProximalSolvers.CDResults`: `converged`, `passes`,
 `maxchange`, `tolerance` and `minimum`. `converged = true` means that the largest change of a block in a full
 pass, in the solver's scaling, was below `tolerance`; it is not an optimality certificate, and
-a run that reaches `maxpasses` returns `converged = false` and ProximalSolvers warns. `fit.result.minimizer` is
-a `BlockIterate` in the coordinates of `Z` (with `:none` it holds the values of `fit.coefficients`), and
-`fit.result.minimum` is the objective of the solver's problem there, which equals the objective above
-at `(β₀, β)` in exact arithmetic.
+a run that exhausts `maxpasses` without meeting that test returns `converged = false` and ProximalSolvers warns.
+`fit.result.minimizer` is a `BlockIterate` in the coordinates of `Z` (with `:none` it holds the values of
+`fit.coefficients`), and `fit.result.minimum` is the objective of the solver's problem there. In exact arithmetic it
+equals the objective above at the mathematical map back from the minimizer to the columns of `X` and the
+intercept `ȳ - x̄ᵀβ` of that map.
+
+**Limit of the map back.** The stored `fit.coefficients` and `fit.intercept` are that map computed in `T`, which
+rounds it. A coefficient whose exact value is below the range of `T` underflows to a subnormal number or to `0`, and
+the residuals, which use the stored values, then differ from those of the solver's problem, as for
+[`lasso`](@ref); the result of the solver is left as it returned it. For `X = reshape([-1e300, 1e300], 2, 1)`,
+`y = [-1e-100, 1e-100]`, `λ = 0` and `intercept = false`, the solver returns `θ = 1e-100` with minimum `0`, the stored
+coefficient is `0` (the exact value `1e-400` underflows) and `sum(abs2, residuals(fit))` is `2e-200`.
 
 To check a fit independently, compute from the returned `β₀`, `β` and the residuals `r = y - β₀ - Xβ`
 (`fit.residuals`) the gradient `g = X̃_Gᵀr/n` of each group, with `X̃` centred if `fit.hasintercept`:

@@ -21,8 +21,15 @@ The fit returned by [`group_lasso`](@ref), with fields
   [`group_lasso`](@ref)); with `standardize = :none` it holds the same values as `coefficients`.
 
 `result.converged` reports ProximalSolvers' coefficient-change test, not an optimality
-certificate. `result.minimum` is the objective of the solver's problem at `result.minimizer`; in
-exact arithmetic it equals the objective of [`group_lasso`](@ref) at `(intercept, coefficients)`.
+certificate. `result.minimum` is the objective of the solver's problem at `result.minimizer`. In
+exact arithmetic it equals the objective of [`group_lasso`](@ref) at the mathematical map back from
+`result.minimizer` to the columns of `X` (`β_G[P[1:r]] = R̃ \\ θ_G` with `standardize = :orthonormal`, `β = θ`
+with `:none`, and `β₀ = ȳ - x̄ᵀβ`). The stored `coefficients` and `intercept` are that map computed in
+`T`, which rounds it: a coefficient whose exact value is below the range of `T` underflows to a subnormal
+number or to `0`, and the residuals, which use the stored values, then differ from those of the solver's
+problem (as for [`lasso`](@ref)); the result of the solver is not altered. For `X = reshape([-1e300, 1e300], 2, 1)`,
+`y = [-1e-100, 1e-100]`, `λ = 0` and `intercept = false` the solver returns `θ = 1e-100` with minimum `0`, the
+stored coefficient is `0` (the exact value `1e-400` underflows) and `sum(abs2, residuals(fit))` is `2e-200`.
 
 The positional constructor `GroupLassoSolution(coefficients, intercept, hasintercept, residuals, λ,
 groups, groupweights, activegroups, standardize, result)` is internal; build a fit with
@@ -50,7 +57,7 @@ const RANK_TOLERANCE_C = 10.0
 
 # The tolerance τ_G = c √max(n, m) eps(T) |R₁₁| of the rank decision of a group of m columns of n
 # rows, where |R₁₁| is the first diagonal entry of the triangular factor of the pivoted QR of
-# its (centred) columns, which is the largest column norm. A diagonal entry |Rᵢᵢ| above τ_G
+# its (centred) columns, which is the largest column norm up to rounding. A diagonal entry |Rᵢᵢ| above τ_G
 # counts toward the rank (see `group_basis`). The rank decision takes the tolerance from this function.
 # The value is a Float64, so that a finite Float32 factor does not overflow it.
 rank_tolerance(::Type{T}, n::Integer, m::Integer, r11::Real) where {T<:AbstractFloat} =
@@ -63,7 +70,7 @@ rank_tolerance(::Type{T}, n::Integer, m::Integer, r11::Real) where {T<:AbstractF
 #
 # - `Z`: the n×r matrix `√n Q[:, 1:r]`, whose columns have `Z'Z/n = I` up to rounding;
 # - `R`: the upper triangular `R̃ = R[1:r, 1:r]/√n`, so that `A[:, pivots] ≈ Z R̃` with `pivots =
-#   P[1:r]` (the first r columns of the QR, the columns that span the group); the columns
+#   P[1:r]` (the first r columns of the QR, the columns that the rule retains); the columns
 #   `P[r+1:m]` of the group get the coefficient 0;
 # - `pivots`: those column numbers within the group.
 #
@@ -76,9 +83,11 @@ function group_basis(A::Matrix{T}) where {T<:AbstractFloat}
   all(isfinite, d) || throw(ArgumentError("group_lasso: the triangular factor of the QR of a group is not finite (overflow)"))
   τ = rank_tolerance(T, n, size(A, 2), d[1])
   r = count(>(τ), d)
+  r == 0 && return (; Z = zeros(T, n, 0), R = UpperTriangular(zeros(T, 0, 0)), pivots = Int[])
   rootn = sqrt(T(n))
-  Q = Matrix(F.Q)
-  (; Z = rootn .* Q[:, 1:r], R = UpperTriangular(R[1:r, 1:r] ./ rootn), pivots = F.p[1:r])
+  Z = F.Q * Matrix{T}(I, n, r)                 # the first r columns of Q
+  Z .*= rootn
+  (; Z, R = UpperTriangular(R[1:r, 1:r] ./ rootn), pivots = F.p[1:r])
 end
 
 # The groups as lists of columns of a design with p columns: disjoint, nonempty, with each
@@ -229,20 +238,28 @@ nonnegative and representable in `T` (a `BigFloat` or `Int` `λ` is converted to
 converts to zero or to infinity is refused).
 
 **`standardize = :none`.** The solver minimizes the objective on the columns as they are (centred
-with an intercept), with the groups as given. Scaling or recombining the columns of a group changes
-the estimate.
+with an intercept), with the groups as given. Scaling the columns of a group, or recombining them by a
+matrix that is not orthogonal, can change the estimate.
 
 **`standardize = :orthonormal`.** The penalty is on the contribution of each group to the fitted
-values, `‖X̃_G β_G‖₂/√n`, so the estimate does not depend on the basis of a group: an invertible
-recombination `X̃_G → X̃_G M` (with the same number of columns) leaves the fitted values unchanged, in
-exact arithmetic and where the computed rank, defined below, is the same. With the default weights, adding a column to a group changes its
-weight, so the invariance is stated for the weights given. The fit is computed on an orthonormal basis of each group: the centred
-columns `X̃_G` (with an intercept; `X_G` without one) are factored by a pivoted QR in `T`,
+values, `‖X̃_G β_G‖₂/√n`, so it depends on the group through its column span. For an invertible `M` with as
+many columns, `X̃_G M` has the same span, so in exact arithmetic the minimum and the fitted values do not change
+under `X̃_G → X̃_G M` (the coefficients of the group become `M⁻¹β_G`). In floating point the fit uses the span of
+the `r` columns that the rank rule below retains, and the fitted values are the same, up to rounding, when the
+retained spans of `X̃_G` and `X̃_G M` are the same subspace (and the solver has stopped at its tolerance). This holds when the rule retains all the columns of
+the group before and after the transformation (with `M` well conditioned), and when the dropped directions are
+at rounding level in both. Equal ranks below the number of columns do not suffice: the transformation can change
+which directions are retained, and then the fits differ. With the default weights, adding a column to a group
+changes its weight, so a comparison needs the weights given. The fit is computed on an orthonormal basis of each
+group: the centred columns `X̃_G` (with an intercept; `X_G` without one) are factored by a pivoted QR in `T`,
 `X̃_G[:, P] = Q R`, with `r` the number of diagonal entries `|Rᵢᵢ|` of `R` above the tolerance
 `τ_G = c √max(n, |G|) eps(T) |R₁₁|` of the rank decision. The constant `c` is documented on the page of
-the group lasso. The matrix `Z_G = √n Q[:, 1:r]` has `Z_G'Z_G/n = I` up to rounding, the solver
-minimizes `‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖₂` over the blocks `θ_{Gₖ}` (block steps that are exact up to
-rounding), and the coefficients of the group are `β_G[P[1:r]] = R̃ \\ θ_G` with `R̃ = R[1:r, 1:r]/√n`, and
+the group lasso. The matrix `Z_G = √n Q[:, 1:r]` has `Z_G'Z_G/n = I` up to rounding, and the solver
+minimizes `‖ỹ - Zθ‖²/(2n) + λ Σₖ wₖ‖θ_{Gₖ}‖₂` over the blocks `θ_{Gₖ}`. The blocks of `Z` have, up to rounding, the same curvature
+in all directions, but ProximalSolvers' block step uses a bound on the curvature, which exceeds it by a margin
+that depends on `n` and `eps(T)`, so a pass need not solve a block problem, and the solver iterates until its change
+test is met or `maxpasses` is exhausted (see the page of the group lasso for an example). The coefficients of the group are
+`β_G[P[1:r]] = R̃ \\ θ_G` with `R̃ = R[1:r, 1:r]/√n`, and
 `0` on the columns `P[r+1:end]`, which the decision treats as combinations of the others. A group of
 rank `0` (zero columns, or constant columns with an intercept) stays in the fit as one column of zeros,
 so that the groups of the fit are the groups given; its coefficients are `0`. The solution is then
@@ -251,15 +268,17 @@ is the sum of the ranks (at least one per group).
 
 **Preprocessing.** With `intercept = true` the columns and the response are centred as in
 [`lasso`](@ref): a column (or `y`) whose entries are all equal has that value as its mean, so that
-it centres to exact zeros. Non-finite entries of `X` (and of `y` with an intercept) are refused with
-an `ArgumentError` that names the column.
+it centres to exact zeros. Non-finite entries of `X` and of `y` are refused with an `ArgumentError`: by
+this package for `X` with `standardize = :orthonormal` and for `X` and `y` with an intercept, with a message that names
+the column or `y`, and otherwise by ProximalSolvers.
 
 **Solving.** The loss is ProximalBase's `LeastSquaresLoss` scaled by `1/n`, the penalty is
 `GroupNormL2(λ, groups, weights)` on a `BlockIterate`, and the solve is `ProximalSolvers.solve!`,
 unchanged. The coordinates are the groups and a pass visits whole groups; `CDSolver` refuses
 `momentum = true`, and its error is passed on. `fit.result.converged` is the solver's
 coefficient-change test and not a bound on the distance to the minimum or on the optimality
-conditions. A solve that stops at `maxpasses` returns `converged == false` and ProximalSolvers warns.
+conditions. A solve that exhausts `maxpasses` without meeting the change test returns `converged == false` and
+ProximalSolvers warns.
 To check a fit, compute the group optimality conditions from the returned `coefficients`,
 `intercept` and `residuals` (see the page of the group lasso).
 
@@ -270,7 +289,7 @@ function group_lasso(X::Matrix{T}, y::Vector{T}, λ::Real, groups::AbstractVecto
                      intercept = true, standardize = :orthonormal,
                      groupweights = nothing) where {T<:Union{Float32, Float64}}
   check_flag(:intercept, intercept)
-  standardize in (:orthonormal, :none) || throw(ArgumentError(
+  standardize isa Symbol && (standardize === :orthonormal || standardize === :none) || throw(ArgumentError(
     "group_lasso: standardize must be :orthonormal or :none, but it is $(repr(standardize))"))
   n, p = size(X)
   n ≥ 1 || throw(DimensionMismatch("X needs at least one row, but it has $n"))

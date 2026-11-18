@@ -205,19 +205,24 @@ certificate `group_gap` (in `certificates.jl`) is stated for the objective
 `‖y - β₀1 - Xβ‖²/(2n) + λ Σₖ wₖ ‖X̃_{Gₖ}β_{Gₖ}‖/√n` (`orthonormal`) or `... + λ Σₖ wₖ ‖β_{Gₖ}‖` (`none`) at the stored
 intercept and coefficients, with `X̃` centered at the exact means. The dual point is `u = t r_c` with `r_c` the
 centered residual, and `t ≤ 1` is such that `u` is feasible in exact arithmetic: `‖P_G u‖ ≤ √n λ wₖ` with `P_G` the
-projector onto the full column span of `X̃_G`, built from all its columns (the Gram matrix of `X̃_G` must be positive
-definite in exact arithmetic, otherwise the case is `uncertifiable`; no direction is dropped), or
+projector onto the full column span of `X̃_G`, built from all its columns by the normal equations, without dropping a
+direction (for this the Gram matrix of `X̃_G` must be positive definite in rational arithmetic: the certifier returns
+`uncertifiable` for a group with a singular Gram matrix, although the projector onto the span of such columns exists
+and the certifier does not construct it), or
 `‖X̃_G'u‖/n ≤ λ wₖ` for each group. The dual value `D` is then at most the objective at all `(β₀, β)`. The stored
 inputs are converted to rational numbers without rounding, and `r_c`, the Gram matrices, `X̃_G'u` and `D` are
 computed in rational arithmetic, so there is no rounding error to bound there; the square roots of the penalty and the
 conversions to Float64 are rounded, with directed rounding in 256-bit BigFloat, which gives `P_lo ≤ P ≤ P_hi` and `D_lo ≤ D ≤ D_hi`. As for
 `dense-standardized`, the value is the upper bound `value_hi` of the relative gap
-`max(P - D, 0)/max(P, floatmin)` and the certificate is `uncertifiable` when `value_lo ≤ target < value_hi`. A problem
-with `λ = 0` or a weight of zero has no dual point of this form and is `uncertifiable`; no KKT residual is reported
-as a gap. `check_certificates.jl` tests the exact bounds, a closed-form case (two orthogonal centered columns whose
+`max(P - D, 0)/max(P, floatmin)` and the certificate is `uncertifiable` when `value_lo ≤ target < value_hi`. The
+domain of this certifier is `λ > 0` and positive weights, and it returns `uncertifiable` for `λ = 0` or a weight of
+zero. That is a limit of this routine, not a statement that no dual point exists there: `t = 0` gives `u = 0` and
+`D = 0`, a feasible point with a valid but loose gap, and a positive `t` can be feasible too. No KKT residual is
+reported as a gap. `check_certificates.jl` tests the exact bounds, a closed-form case (two orthogonal centered columns whose
 solution is `(1 - √n λ w/‖P_G ỹ‖) P_G ỹ`, with a relative gap of `49/64` at `β = 0`), a designed optimum for both
 objectives, nonoptimal points, weak duality and feasibility at random points, the zero solution at `λ ≥ λmax`, a
-nearly collinear group, rank-deficient groups and nonfinite inputs, and runs both cases once against their target.
+nearly collinear group, groups with a singular Gram matrix, `λ = 0` and a weight of zero, nonfinite inputs, and runs
+both cases once against their target.
 The solver's tolerance is explicit in each case: `1e-7` for `orthonormal` and `1e-8` for `none`, which left relative
 gaps of at most `6.3e-8` and `7.3e-8` in a pilot on repetitions 1 to 10 on Julia 1.13.4 (`1e-7` left up to `6.9e-7` for `none`).
 

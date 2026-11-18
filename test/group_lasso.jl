@@ -11,7 +11,7 @@ module GroupLassoTest
 #     and its decoupling over groups that are orthogonal after centring;
 #   * λmax from the data, with the groups of weight zero profiled out;
 #   * invariance of the fit to rescaling or recombining the columns of a group, asserted where the
-#     computed rank and the condition number of the transformation permit it;
+#     computed ranks agree, the retained spans agree and the transformation is well conditioned;
 #   * the rows of the numerical regression suite of PR #215 that apply to group_lasso.
 # The tolerances of the optimality conditions are formulas stated at `kkt` below. The rank decision
 # (`HighDimensionalModels.group_basis`, with its provisional tolerance) is exercised on cases
@@ -29,6 +29,7 @@ const HDM = HighDimensionalModels
 # ---------------------------------------------------------------------------------
 
 tolof(T) = T === Float32 ? 1e-6 : 1e-10
+tight(T) = T === Float32 ? 1e-6 : 1e-13
 cyc(T; tol = tolof(T), maxpasses = 20_000) = CDSolver(order = :cyclic, tol = tol, maxpasses = maxpasses)
 
 # Gaussian columns with different scales and means; the response uses the columns `active`
@@ -164,6 +165,13 @@ centred64(X, G; intercept = true) =
     Float64.(bigcentred(BigFloat.(X[:, G]), intercept))
   end
 
+# The projector (n×n, Float64) on the span of the columns that the rank rule retains for the columns G of X
+retained_projector(X, G; intercept = true) = begin
+  b = HDM.group_basis(HDM.preprocess(X, zeros(eltype(X), size(X, 1)), intercept, false).Z[:, G])
+  Z = Float64.(b.Z)
+  Z * Z' / size(X, 1)
+end
+
 # The condition number of the centred columns G (a Float64 computation, for a group of full rank)
 cond_centred(X, G; intercept = true) = cond(centred64(X, G; intercept))
 
@@ -171,16 +179,18 @@ cond_centred(X, G; intercept = true) = cond(centred64(X, G; intercept))
 smin_centred(X, G; intercept = true) = minimum(svdvals(centred64(X, G; intercept)))
 
 # The tolerance for the fitted values of a fit of a design with condition number κ (of the centred
-# design) and K groups, against the exact minimizer or another fit. The fitted values are determined
-# up to n‖κ_res‖/σmin(X̃) for a violation κ_res of the optimality conditions, which is of the order of
-# smax K stol ys (see `kkt`), so that the difference in norm is of the order of κ K stol ‖ỹ‖, plus the
-# rounding κ ε ‖ỹ‖ of the data and of the back-map. With a factor of 16 for the comparison of two fits and a margin:
+# design) and K groups, against the exact minimizer or another fit, for a solver with stopping tolerance
+# `stol`. The fitted values are determined up to n‖κ_res‖/σmin(X̃) for a violation κ_res of the optimality
+# conditions, which is of the order of smax K stol ys (see `kkt`), so that the difference in norm is of the
+# order of κ K stol ‖ỹ‖, plus the rounding κ ε ‖ỹ‖ of the data and of the back-map. With a factor of 16 for the
+# comparison of two fits and a margin:
 #   tolfit = 16 κ (K stol + ε) ‖ỹ‖.
-# Where the block steps are exact (one group, or groups orthogonal to one another), a pass solves the
-# problem up to rounding and the stopping rule does not enter:
-#   tolexact = 16 κ ε ‖ỹ‖.
-tolfit(T, κ, K, ynorm) = 16 * κ * (K * tolof(T) + Float64(eps(T))) * ynorm
-tolexact(T, κ, ynorm) = 16 * κ * Float64(eps(T)) * ynorm
+# ProximalSolvers' block step uses a bound on the curvature of a block that exceeds it by a margin depending on n
+# and eps(T), so a pass does not solve a block problem even when the blocks are orthonormal (one group, or groups
+# orthogonal to one another): no test relies on an exact step. The tests against exact references run the solver to
+# the stopping tolerance `tight(T)`, far below the default for Float64 (Float32 keeps 1e-6, which its rounding
+# allows), and use this bound with that tolerance.
+tolfit(T, κ, K, ynorm; stol = tolof(T)) = 16 * κ * (K * stol + Float64(eps(T))) * ynorm
 
 centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
 
@@ -246,10 +256,10 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
           Pỹ = bigproj(Xc, ỹ)
           w = sqrt(BigFloat(5))
           λ = T(factor * Float64(norm(Pỹ) / (sqrt(BigFloat(n)) * w)))
-          fit = group_lasso(X, y, λ, groups, cyc(T))
+          fit = group_lasso(X, y, λ, groups, cyc(T; tol = tight(T)))
           shrink = max(1 - sqrt(BigFloat(n)) * BigFloat(λ) * w / norm(Pỹ), 0)
           ref = Float64.(ȳ .+ shrink .* Pỹ)
-          @test norm(fitted(y, fit) - ref) ≤ tolexact(T, cond_centred(X, 1:5), centred_norm(y))
+          @test norm(fitted(y, fit) - ref) ≤ tolfit(T, cond_centred(X, 1:5), 1, centred_norm(y); stol = tight(T))
           @test (factor > 1) == iszero(fit.coefficients)
         end
       end
@@ -260,7 +270,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       # vectors that sum to 0, so the rank is 9 and P_G ỹ = ỹ; the fit is (1 - √n λ w/‖ỹ‖)₊ ỹ plus the mean
       rng = Xoshiro(21)
       X, y = T.(randn(rng, 10, 15) .+ 0.5), T.(randn(rng, 10))
-      fit = group_lasso(X, y, T(0.02), [collect(1:15)], cyc(T))
+      fit = group_lasso(X, y, T(0.02), [collect(1:15)], cyc(T; tol = tight(T)))
       @test computed_rank(X, collect(1:15)) == 9 && count(!iszero, fit.coefficients) ≤ 9
       s = svdvals(centred64(X, 1:15))
       ref = setprecision(BigFloat, 256) do
@@ -268,7 +278,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
         ȳ = sum(yb) / 10
         Float64.(ȳ .+ max(1 - sqrt(BigFloat(10)) * BigFloat(T(0.02)) * sqrt(BigFloat(15)) / norm(yb .- ȳ), 0) .* (yb .- ȳ))
       end
-      @test norm(fitted(y, fit) - ref) ≤ tolexact(T, s[1] / s[9], centred_norm(y))
+      @test norm(fitted(y, fit) - ref) ≤ tolfit(T, s[1] / s[9], 1, centred_norm(y); stol = tight(T))
     end
 
     @testset "groups orthogonal after centring decouple" begin
@@ -281,7 +291,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       y = T.(1.0 .+ X[:, 1] .- 0.7 .* X[:, 3] .+ 0.4 .* randn(rng, n))
       groups = [[1, 2], [3, 4, 5], [6, 7]]
       for λ in (T(0.1), T(0.35))
-        fit = group_lasso(X, y, λ, groups, cyc(T))
+        fit = group_lasso(X, y, λ, groups, cyc(T; tol = tight(T)))
         ref = setprecision(BigFloat, 256) do
           Xb, yb = BigFloat.(X), BigFloat.(y)
           ȳ = sum(yb) / n
@@ -293,7 +303,8 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
           end
           Float64.(total)
         end
-        @test norm(fitted(y, fit) - ref) ≤ tolexact(T, 1.0, centred_norm(y)) + 16 * ε * sqrt(3) * centred_norm(y)
+        # the groups are orthogonal up to the rounding of the data to T: the second term
+        @test norm(fitted(y, fit) - ref) ≤ tolfit(T, 1.0, 3, centred_norm(y); stol = tight(T)) + 16 * ε * sqrt(3) * centred_norm(y)
         @test 0 < length(fit.activegroups) < 3
       end
     end
@@ -317,8 +328,11 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
     kind === :default && @test above.intercept == HDM.column_mean(y) && above.residuals == y .- above.intercept
   end
 
-  # 4. invariance of the orthonormal fit, where the computed rank is preserved and the transformation
-  #    is well conditioned
+  # 4. invariance of the orthonormal fit under X̃_G → X̃_G M. The fit uses the span of the columns that the rank
+  #    rule retains, so the precondition is that the retained spans of X̃_G and X̃_G M agree (the projectors on
+  #    them are asserted to agree, to κ cond(M) ε), with equal computed ranks and a well conditioned M. Equal
+  #    ranks alone are not the precondition: a transformation can change which directions below the full rank
+  #    are retained (the last testset of this section).
   @testset "invariance under :orthonormal, $T" for T in (Float32, Float64)
     X, y = problem(T, 7, 50, 8)
     groups = [[1, 2, 3], [4, 5, 6], [7, 8]]
@@ -332,6 +346,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       Xs[:, 2] .*= s
       @test computed_rank(Xs, [1, 2, 3]) == computed_rank(X, [1, 2, 3]) == 3
       @test cond(Float64.(Diagonal([1, s, 1]))) ≤ 10
+      @test norm(retained_projector(Xs, [1, 2, 3]) - retained_projector(X, [1, 2, 3])) ≤ 16 * cond_centred(X, 1:3) * 4 * eps(T)
       fit = group_lasso(Xs, y, λ, groups, cyc(T))
       @test norm(fitted(y, fit) - fitted(y, base)) ≤ tolfit(T, κ * 4, 3, ynorm)
       # the coefficient of the column changes by the factor 1/s, the others do not: the coefficients of the
@@ -348,6 +363,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       Xr = copy(X)
       Xr[:, 1:3] = X[:, 1:3] * T.(M)
       @test computed_rank(Xr, [1, 2, 3]) == computed_rank(X, [1, 2, 3]) == 3
+      @test norm(retained_projector(Xr, [1, 2, 3]) - retained_projector(X, [1, 2, 3])) ≤ 16 * cond_centred(X, 1:3) * cond(M) * eps(T)
       fit = group_lasso(Xr, y, λ, groups, cyc(T))
       @test norm(fitted(y, fit) - fitted(y, base)) ≤ tolfit(T, κ * cond(M), 3, ynorm)
       @test fit.activegroups == base.activegroups
@@ -355,6 +371,32 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       back = copy(fit.coefficients)
       back[1:3] = M * back[1:3]
       @test norm(back - base.coefficients) ≤ tolfit(T, κ * cond(M), 3, ynorm) / smin_centred(X, 1:8)
+    end
+    @testset "equal computed ranks do not suffice" begin
+      # Three centred orthogonal columns (two nonzero entries ±1/√2 each, n = 100) scaled to the norms 1, 1.2τ
+      # and 0.8τ, with τ = rank_tolerance(T, n, 3, 1), so that |R₁₁| = 1: the rule retains the first two columns.
+      # Scaling the columns by 1, 1/2 and 2 (condition number 4) gives the norms 1, 0.6τ and 1.6τ: it retains the
+      # first and third. Both have rank 2, but the retained spans differ, and with y the second column the fitted
+      # values at λ = 0 are y and 0. The scales are stated through `rank_tolerance`, so the case holds for any
+      # value of its constant.
+      n = 100
+      U = zeros(T, n, 3)
+      for k in 1:3
+        U[2k-1, k] = inv(sqrt(T(2)))
+        U[2k, k] = -U[2k-1, k]
+      end
+      τ = HDM.rank_tolerance(T, n, 3, 1.0)
+      X3 = U * Diagonal(T[1, 1.2τ, 0.8τ])
+      M3 = Diagonal(T[1, 0.5, 2])
+      Xr3 = X3 * M3
+      y3 = U[:, 2]
+      @test computed_rank(X3, [1, 2, 3]) == computed_rank(Xr3, [1, 2, 3]) == 2
+      @test cond(Float64.(M3)) == 4
+      @test norm(retained_projector(X3, [1, 2, 3]) - retained_projector(Xr3, [1, 2, 3])) > 1
+      f, fr = group_lasso(X3, y3, 0, [1:3], cyc(T; tol = tight(T))), group_lasso(Xr3, y3, 0, [1:3], cyc(T; tol = tight(T)))
+      @test norm(predict(f, X3)) ≈ 1 atol = 1e-3
+      @test norm(predict(fr, Xr3)) ≤ 1e-3
+      @test norm(predict(f, X3) - predict(fr, Xr3)) > 0.5
     end
   end
 
@@ -500,8 +542,11 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
     @test occursin("is Inf", fails(() -> group_lasso(X, y, λ, groups, cyc(T); groupweights = [1.0, Inf, 1.0]), ArgumentError))
     T === Float32 && @test occursin("not representable", fails(() -> group_lasso(X, y, λ, groups, cyc(T); groupweights = [1e300, 1.0, 1.0]), ArgumentError))
     @test occursin("vector of real numbers", fails(() -> group_lasso(X, y, λ, groups, cyc(T); groupweights = (1.0, 1.0, 1.0)), ArgumentError))
-    @test occursin("standardize must be", fails(() -> group_lasso(X, y, λ, groups, cyc(T); standardize = :foo), ArgumentError))
-    @test occursin("standardize must be", fails(() -> group_lasso(X, y, λ, groups, cyc(T); standardize = "orthonormal"), ArgumentError))
+    # an unknown standardization of any type is an ArgumentError with one message (`missing` has no Bool equality)
+    for unknown in (:foo, "orthonormal", missing, nothing, 1, [:none])
+      msg = fails(() -> group_lasso(X, y, λ, groups, cyc(T); standardize = unknown), ArgumentError)
+      @test startswith(msg, "group_lasso: standardize must be :orthonormal or :none, but it is ")
+    end
     @test occursin("intercept must be true or false", fails(() -> group_lasso(X, y, λ, groups, cyc(T); intercept = 1), ArgumentError))
     @test occursin("y has 39 entries", fails(() -> group_lasso(X, y[1:39], λ, groups, cyc(T)), DimensionMismatch))
     @test occursin("at least one row", fails(() -> group_lasso(zeros(T, 0, 5), T[], λ, groups, cyc(T)), DimensionMismatch))
@@ -604,6 +649,29 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
         @test !fit.result.converged && fit.result.passes == 1
         @test all(isfinite, fit.coefficients) && all(isfinite, fit.residuals) && isfinite(fit.intercept)
         @test group_lasso(X, y, λ, groups, cyc(T); standardize = std).result.converged
+      end
+      # exhausting maxpasses is not nonconvergence: the change test is checked after the last permitted pass
+      one_pass = @test_logs group_lasso(ones(T, 4, 1), zeros(T, 4), T(0.1), [1:1], cyc(T; maxpasses = 1))
+      @test one_pass.result.passes == 1 && one_pass.result.converged
+      # the block step of ProximalSolvers is not the minimizer of the block problem: for a one-column group of ones
+      # (X̃ = X, w = 1, the minimizer of (1 - β)²/2 + 0.25 |β| is 0.75) with n = 10⁶ in Float32 one pass is far
+      # from it, and the solver needs several passes to meet its change test
+      if T === Float32
+        x1, y1 = ones(T, 10^6, 1), ones(T, 10^6)
+        first_pass = @test_logs (:warn,) match_mode = :any group_lasso(x1, y1, T(0.25), [1:1], cyc(T; maxpasses = 1); intercept = false)
+        @test abs(first_pass.coefficients[1] - 0.75) > 0.05
+        full = group_lasso(x1, y1, T(0.25), [1:1], cyc(T); intercept = false)
+        @test full.result.converged && full.result.passes > 5 && abs(full.coefficients[1] - 0.75) < 1e-4
+      end
+    end
+    @testset "the stored coefficients carry the rounding of the map back" begin
+      # theta = 1e-100 is the solver's coordinate, the exact coefficient 1e-400 underflows to the stored 0, and the
+      # residuals, which use the stored value, are y: the objective at the stored fields is not result.minimum
+      if T === Float64
+        fit = group_lasso(reshape([-1e300, 1e300], 2, 1), [-1e-100, 1e-100], 0, [1:1], cyc(T); intercept = false)
+        @test collect(fit.result.minimizer) == [1e-100] && fit.result.minimum == 0
+        @test fit.coefficients == [0.0] && isempty(fit.activegroups)
+        @test fit.residuals == [-1e-100, 1e-100] && sum(abs2, fit.residuals) ≈ 2e-200
       end
     end
   end

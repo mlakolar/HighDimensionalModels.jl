@@ -380,8 +380,8 @@ end
 # ---- group lasso (#224) ----
 # Controls of `group_gap`: closed-form values, a designed optimum, designed nonoptimal points, weak
 # duality and dual feasibility at random points, zero solutions at λ ≥ λmax, a nearly collinear group
-# (full column span), rank-deficient groups and problems that are not a gap (λ = 0, a weight of zero),
-# nonfinite inputs, and the exact bounds. The last testset needs HighDimensionalModels.
+# (full column span), groups with a singular Gram matrix and problems outside the domain of the certifier
+# (λ = 0, a weight of zero), nonfinite inputs, and the exact bounds. The last testset needs HighDimensionalModels.
 
 # a group lasso with intercept whose solution (β₀, β) is known by construction: the centred columns X̃ (their
 # Float64 means), the gradient X̃_G'θ = v_G of a dual point θ (in the range of X̃, so that it sums to zero up to
@@ -584,16 +584,18 @@ end
   groups, w, β = [[1, 2], [3, 4]], [1.0, 1.0], zeros(4)
   base = group_gap(X, y, sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 1e-6)
   @test ok(base)
-  # a group of columns that are linearly dependent in rational arithmetic: no projector of the full span
+  # a group of columns that are linearly dependent in rational arithmetic: the Gram matrix is singular, and this
+  # certifier, which computes the projector on the span from the normal equations, refuses it
   Xd = Float64[1 0 1 2; 0 1 1 0; 1 1 2 1; 2 1 3 3; 0 2 2 0; 1 0 1 0]
   c = group_gap(Xd, [1.0, 2, 3, 4, 5, 7], 3.5, zeros(4), 0.05, [[1, 2, 3], [4]], [1.0, 1.0]; orthonormal = true, target = 1e-6)
-  @test bad(c) && occursin("linearly dependent", c.note)
+  @test bad(c) && occursin("Gram matrix of the centred columns of group 1 is singular", c.note)
   # the same groups without orthonormalization have a certificate (no projector is needed)
   @test ok(group_gap(Xd, [1.0, 2, 3, 4, 5, 7], 3.5, zeros(4), 0.05, [[1, 2, 3], [4]], [1.0, 1.0]; orthonormal = false, target = 1e-6))
-  # λ = 0 and a weight of zero are not a gap: refused, and no KKT residual is reported instead
+  # λ = 0 and a weight of zero are outside the domain of this certifier: refused, and no KKT residual is reported
+  # in their place
   for (λ, ww) in ((0.0, w), (0.05, [0.0, 1.0]))
     c = group_gap(X, y, sum(y) / n, β, λ, groups, ww; orthonormal = true, target = 1e-6)
-    @test bad(c) && c.measure === :relative_gap && occursin("not a duality gap", c.note)
+    @test bad(c) && c.measure === :relative_gap && occursin("outside the domain of this certificate", c.note)
   end
   # invalid and nonfinite inputs
   @test bad(group_gap(X, y, sum(y) / n, β, -0.05, groups, w; orthonormal = true, target = 1e-6))

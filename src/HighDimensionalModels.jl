@@ -8,7 +8,7 @@ ProximalBase (the loss and the penalty) and ProximalSolvers (coordinate descent)
 """
 module HighDimensionalModels
 
-using LinearAlgebra: ColumnNorm, UpperTriangular, qr!
+using LinearAlgebra: ColumnNorm, I, UpperTriangular, qr!
 using ProximalBase: BlockIterate, GroupNormL2, LeastSquaresLoss, NormL1
 using ProximalSolvers: CDSolver, solve!
 import StatsAPI: coef, predict, residuals, nobs, dof, deviance

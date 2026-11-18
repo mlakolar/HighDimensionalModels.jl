@@ -387,7 +387,8 @@ end
 # D is at most the minimum over β₀ and β, so P - D bounds P - P* from above for a feasible u. The projector is
 # built from all the columns of the group, and not from a truncated set of directions (which can underestimate
 # ‖P_G u‖ and make u infeasible): when the Gram matrix of X̃_G is not positive definite in rational arithmetic
-# the certificate is `uncertifiable`.
+# the certificate is `uncertifiable`. The projector on the span of dependent columns exists; this routine
+# computes it from the normal equations and does not construct it for a singular Gram matrix.
 #
 # Arithmetic. Each stored Float64 input is converted without rounding to a rational number (BigInt numerator and
 # denominator), and r, r̄, r_c, the centred columns, the Gram matrices, X̃_G'u and the quantities that enter P and
@@ -404,8 +405,10 @@ end
 # `uncertifiable` when value_lo ≤ target < value_hi, and otherwise returns value_hi, so that the verdict of the
 # harness is the true one.
 #
-# Not a gap. With λ = 0 or a weight of zero there is no such dual point; the certificate refuses these
-# problems as `uncertifiable`, and a KKT residual is not reported in its place.
+# Domain. The routine is for λ > 0 and positive weights, and returns `uncertifiable` for λ = 0 or a weight of
+# zero. That is a limit of the routine, not a statement that no dual point exists there (t = 0 gives u = 0 and
+# D = 0, a feasible point with a valid but loose gap, and a positive t can be feasible too). A KKT residual is
+# not reported in its place, since it is not a duality gap.
 
 # the exact rational numbers of the certificate
 const GroupRational = Rational{BigInt}
@@ -473,7 +476,7 @@ function group_problem(groups, weights, λ, p::Integer)
   (length(weights) == length(groups) && cert_finite(λ, weights) && all(>=(0), weights) && λ >= 0) ||
     return "λ and the group weights must be finite and nonnegative, with one weight per group"
   (λ > 0 && all(>(0), weights)) ||
-    return "λ and the group weights must be positive: with λ = 0 or a weight of zero there is no dual point of the form used here, and a KKT residual is not a duality gap"
+    return "λ and the group weights must be positive: λ = 0 and a weight of zero are outside the domain of this certificate (a KKT residual is not reported as a duality gap)"
   nothing
 end
 
@@ -503,7 +506,7 @@ function group_parts(X, y, β₀, β, λ, groups, weights; orthonormal::Bool)
       Ac = A .- sum(A; dims = 1) ./ n
       q[k] = sum(abs2, Ac * bG) / n
       s = posdef_quadratic(transpose(Ac) * Ac, g)
-      s === nothing && return "the centred columns of group $k are linearly dependent in exact arithmetic: the projector on their span is not built from them"
+      s === nothing && return "the Gram matrix of the centred columns of group $k is singular in rational arithmetic: this certificate computes the projector on their span from the normal equations, which needs it positive definite"
       cap = n * (λq * wq[k])^2
     else
       q[k] = sum(abs2, bG)
