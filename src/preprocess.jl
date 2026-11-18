@@ -75,7 +75,7 @@ function preprocess(X::Matrix{T}, y::Vector{T}, intercept::Bool, standardize::Bo
     isfinite(sj) || nonfinite_error("the scale of column $j of X", "is not finite")
     iszero(sj) && nonfinite_error("the scale of column $j of X", "underflows to 0")
     s[j] = sj
-    zj .= zj ./ sj                                           # a division: 1/sj overflows for a subnormal sj
+    zj .= zj ./ sj                                           # a division: 1/sj can overflow for a small subnormal sj
     all(isfinite, zj) || nonfinite_error("dividing column $j of X by its scale", "overflowed")
   end
   (; Z, ỹ, x̄, ȳ, s)

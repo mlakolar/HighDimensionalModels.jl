@@ -10,7 +10,8 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   minimizes `‖y - β₀1 - Xβ‖² / (2n) + λ Σⱼ sⱼ|βⱼ|`, with `β₀ = 0` unless `intercept` and `sⱼ = 1`
   unless `standardize_x`. The scale `sⱼ` is the root mean square of the centred column (of the
   raw column without an intercept). With an intercept, a column whose entries are all equal has
-  that value as its mean and scale 0, and its coefficient is 0. The solve is the unweighted lasso
+  that value as its mean and centres to exact zeros; with `standardize_x = true` its scale is 0.
+  Its coefficient is 0. The solve is the unweighted lasso
   on the centred and scaled data with the given `CDSolver`; with both keywords `false` the call
   is the one above. `LassoSolution` has two more fields, `intercept` and `hasintercept`. `coef` is
   `[intercept; coefficients]` with an intercept, `predict` checks the number of columns and adds

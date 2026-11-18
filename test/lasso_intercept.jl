@@ -59,7 +59,8 @@ end
 # ---------------------------------------------------------------------------------
 
 # A column whose entries are all equal has that value as its mean: the rule of `lasso` for constant
-# columns, which keeps them at exact zeros after centring. Other means are the exact means.
+# columns, which keeps them at exact zeros after centring. Other means are the means of the
+# stored entries rounded to 256 bits.
 bigmean(v) = all(==(first(v)), v) ? first(v) : sum(v) / length(v)
 
 # Xt, yt: the centred data (the data themselves without an intercept); s: the root mean squares of
@@ -128,8 +129,9 @@ end
 #     the columns zⱼ, p · max‖z‖ · tolerance/√n, multiplied by sⱼ to be in original units;
 #   * the rounding of the preprocessing and of the back-transformation, c eps(T) (‖xⱼ‖ + √n|x̄ⱼ|)
 #     (‖y‖ + √n|ȳ|)/n with c = 16 (p + 4): the centred column and response carry errors of a few
-#     eps(T) per entry relative to |xᵢⱼ| and |x̄ⱼ|, and ‖r‖, ‖Xβ‖ ≤ 2‖ỹ‖ ≤ 2(‖y‖ + √n|ȳ|). It also
-#     covers the rounding of the solver's own correlations.
+#     eps(T) per entry relative to |xᵢⱼ| and |x̄ⱼ|, and at an exact minimizer ‖r‖ ≤ ‖ỹ‖ and the
+#     centred fitted values satisfy ‖X̃β‖ ≤ 2‖ỹ‖ ≤ 2(‖y‖ + √n|ȳ|) (the run is within the
+#     tolerance of it). It also covers the rounding of the solver's own correlations.
 function kappa(fit, X::Matrix{T}, y::Vector{T}, ref) where T
   n, p = size(X)
   zmax = maximum(j -> iszero(ref.s[j]) ? 0.0 : Float64(norm(ref.Xt[:, j]) / ref.s[j]), 1:p)
@@ -318,8 +320,10 @@ setprecision(BigFloat, 256) do
 
   # -------------------------------------------------------------------------------
   @testset "bitwise invariants, n = 32, $T" for T in (Float32, Float64)
-    # n is a power of two and the data lie on a grid, so that the sums for the means, the centred
-    # entries and the scales are exact: the solver sees the same bits
+    # n is a power of two and the data lie on a grid, so that the sums for the means and the centred
+    # entries are exact. The scales involve a square root and are rounded: the invariants rest on the
+    # rounded computations of the scales giving the same bits, which holds for a shift by 8 and for a
+    # power-of-two column scaling, and the solver then sees the same bits
     n, p = 32, 4
     X64, y64 = grid_problem(50, n, p)
     X, y = T.(X64), T.(y64)
@@ -572,6 +576,25 @@ setprecision(BigFloat, 256) do
     end
     @test_throws ArgumentError lasso(X, y, 0.1f0, cyc(Float32))
 
+    # squares that underflow: entries near 1e-170 (Float64) or 1e-25 (Float32) have a nonzero root
+    # mean square with a positive finite scale, and the fit succeeds
+    for (T, sc) in ((Float64, 1e-170), (Float32, 1f-25))
+      rng = Xoshiro(66)
+      x = T(sc) .* randn(rng, T, 40)
+      @test all(iszero, abs2.(x))
+      Xu = [x randn(rng, T, 40, 2)]
+      yu = Xu[:, 2] .- T(0.5) .* Xu[:, 3] .+ T(0.3) .* randn(rng, T, 40)
+      for ic in (false, true)
+        d = HDM.preprocess(Xu, yu, ic, true)
+        ref = reference(Xu, yu, ic, true)
+        @test 0 < d.s[1] < sqrt(floatmin(T)) && all(isfinite, d.Z)
+        @test Float64(d.s[1]) ≈ Float64(ref.s[1]) rtol = 4 * eps(T) * (ceil(log2(40)) + 2)
+        fit = lasso(Xu, yu, T(0.1), cyc(T); intercept = ic, standardize_x = true)
+        @test fit.result.converged && all(isfinite, fit.coefficients)
+        check_fit(fit, Xu, yu, reference(Xu, yu, ic, true))
+      end
+    end
+
     # Float64: a column of 1e-300, whose squares underflow, has a representable scale; a back-transformation
     # that overflows is an error that names the column of X
     n = 20
@@ -643,8 +666,9 @@ setprecision(BigFloat, 256) do
     # beyond the range of Float64 the squares of the centred design overflow and the solver refuses
     # when the columns are not scaled
     st || @test_throws ArgumentError lasso(1e200 .* X, y, 1e200 * λ, cyc(Float64); intercept = ic)
-    # y → cy at the level cλ: β → cβ and θ → cθ, in extremes where the squares of y underflow (1e-150
-    # and 1e-100) or are large. A run reports convergence, or says that it did not.
+    # y → cy at the level cλ: β → cβ and θ → cθ, at small scales (the squares of y are 1e-300 and
+    # 1e-200, normal numbers near the bottom of the range) and at a large one. A run reports
+    # convergence, or says that it did not.
     for c in (1e-150, 1e-100, 1e100)
       yc = c .* y
       fit = lasso(X, yc, c * λ, cyc(Float64); intercept = ic, standardize_x = st)

@@ -41,17 +41,29 @@ directly.
   `0`; with `standardize_x = true` its scale is `0` and no division takes place. A zero
   column also gets `0` without an intercept. Without an intercept, a constant column that is not
   zero is an ordinary column: with `standardize_x = true`, `fill(0.1, n)` has the scale `0.1`.
-- **Nearly constant columns.** There is no tolerance. A column that is nearly constant but not
-  constant has a tiny scale `sⱼ`, hence a tiny penalty `λsⱼ` on `βⱼ`, and its fitted
-  coefficient can be large. A column whose scale underflows to zero while it is not all zeros,
+- **Nearly constant columns.** There is no tolerance. With `intercept = true` and
+  `standardize_x = true`, a column that is nearly constant but not constant, with variation small
+  relative to its level, has a scale `sⱼ` small relative to that level, hence a small penalty
+  `λsⱼ` on `βⱼ`, and its fitted coefficient can be large. (Without `standardize_x`, `sⱼ = 1`; with
+  it and without an intercept, `sⱼ` is the root mean square of the raw column, which is large for
+  a column of large level.) A column whose scale underflows to zero while it is not all zeros,
   and a design that overflows when centred or when the fit is scaled back, are refused with an
   `ArgumentError` that names `X` or `y` and the step.
 - **Overflow.** The means and the scales are computed from the entries divided by a power of
   two near the largest entry, so they are finite when `‖xⱼ‖` overflows but the root mean square
   does not. A design whose squares overflow, for example `Float32` columns near `1e20`, is
   refused with an `ArgumentError` by the default call, because the solver's curvature
-  overflows; with `standardize_x = true` the matrix `Z` is finite, and the same data can be
-  fit.
+  overflows; with `standardize_x = true` the matrix `Z` is finite, and such data can be fit,
+  provided that the centring, the scales, the solve and the back-map are representable. Centring
+  can itself overflow: `Float32[floatmax(Float32), floatmax(Float32), -floatmax(Float32)]` as a
+  column with `intercept = true` throws an `ArgumentError` even with `standardize_x = true`.
+- **Limit of the back-map.** `βⱼ = θⱼ/sⱼ` is formed in the type `T`. A coefficient whose exact
+  value is below the range of `T` underflows to a subnormal number or `0`, and the residuals on
+  the original data, which use the stored `β`, then differ from those of the solver's problem.
+  For `X = reshape([-1e300, 1e300], 2, 1)`, `y = [-1e-100, 1e-100]`, `λ = 0` and
+  `standardize_x = true`, the solver returns `θ = 1e-100` with minimum `0` and `converged = true`,
+  while the stored coefficient is `0` (the exact value `1e-400` underflows) and
+  `sum(abs2, residuals(fit))` is `2e-200`. The result of the solver is left as it returned it.
 
 ## Inputs
 
@@ -127,8 +139,19 @@ on the transformed problem `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`. With `stand
 `fit.result.minimizer` is `θ`, with `θⱼ = sⱼ βⱼ`, and not `coefficients` (with `intercept = true`
 alone, `θ = β` and the two are the same vector); `fit.result.minimum` is
 `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the weighted objective above at `(β₀, β)` in exact
-arithmetic, not the plain lasso objective of `β`; and `maxchange` and `tolerance` are in units of
-`θ`, with the response scale `‖ỹ‖/√n`.
+arithmetic, not the plain lasso objective of `β`.
+
+`maxchange` and `tolerance` are the solver's. With `relative = true` (the default of `CDSolver`)
+and `ỹ ≠ 0`, `maxchange` is the largest `|Δθⱼ|‖Zⱼ‖/√n` of a pass and `tolerance` is
+`tol‖ỹ‖/√n`, where `Zⱼ` is column `j` of the matrix the solver sees: `Z` with
+`standardize_x = true` (`‖Zⱼ‖ = √n` up to rounding for a column that is not zero, so the changes
+are in units of `θ`), and `X` or the centred `X` otherwise (so the changes are multiplied by
+`‖xⱼ‖/√n` or `‖x̃ⱼ‖/√n`). With `relative = false`, or `ỹ = 0`, the threshold is the absolute `tol`
+and the changes are not multiplied. For `X = reshape([1., 3., 5.], 3, 1)`, `y = [1., 2., 6.]`,
+`λ = 0.1`, `intercept = true`, one cyclic pass (`maxpasses = 1`, which makes the solver warn) and
+`tol = 1e-4`, both settings return the same
+`θ`, with `(maxchange, tolerance)` of about `(1.98, 2.2e-4)` with relative scaling and
+`(1.2125, 1e-4)` without.
 
 To check a fit without the solver's stopping rule, compare the correlations of the residuals
 with the penalty level: at a minimizer, `|Xⱼ'r|/n ≤ λ` for every column and `Xⱼ'r/n = λ sign(βⱼ)`

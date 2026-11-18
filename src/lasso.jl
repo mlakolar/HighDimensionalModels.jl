@@ -22,8 +22,15 @@ where `Z` and `ỹ` are the centred and scaled data of [`lasso`](@ref) (`X` and 
 both keywords false). With `standardize_x = true`, `result.minimizer` is `θ`, with `θⱼ = sⱼ βⱼ`,
 and `result.minimum` is `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the objective of `lasso` at
 `(β₀, β)` (the one with the weights `sⱼ`, not the plain lasso objective of `β`) in exact
-arithmetic. `result.maxchange` and `result.tolerance` are in units of `θ`, against the response
-scale `‖ỹ‖/√n`. With `intercept = true` and `standardize_x = false`, `θ = β`.
+arithmetic. With `intercept = true` and `standardize_x = false`, `θ = β`.
+
+`result.maxchange` and `result.tolerance` are the solver's. With `relative = true` (the default
+of `CDSolver`) and `ỹ ≠ 0`, `maxchange` is the largest change of a coefficient `|Δθⱼ|‖Zⱼ‖/√n` in
+a pass and `tolerance` is `tol‖ỹ‖/√n`, where `Zⱼ` is column `j` of the matrix the solver sees:
+`Z` with `standardize_x = true` (`‖Zⱼ‖ = √n` up to rounding for a column that is not zero, so the
+changes are in units of `θ`), and `X`, or `X` with centred columns, otherwise (so the changes are
+multiplied by `‖xⱼ‖/√n` or `‖x̃ⱼ‖/√n`). With `relative = false`, or `ỹ = 0`, the threshold is the
+absolute `tol` and the changes of `θⱼ` are not multiplied.
 
 The positional constructor `LassoSolution(coefficients, residuals, λ, intercept, hasintercept,
 result)` is internal; build a fit with [`lasso`](@ref).
@@ -62,9 +69,12 @@ given. The intercept is not penalized.
   a power of two not above the largest `|x̃ᵢⱼ|`, which avoids the overflow of the norm of the column
   when the root mean square is representable. A column whose centred entries are all zero
   (a zero column, or a constant column with an intercept) has scale `0`: the solver keeps it at
-  zero and its coefficient is `0`. The decision uses no tolerance: a column that is nearly
-  constant but not constant has a tiny `sⱼ`, hence a tiny penalty `λsⱼ` on `βⱼ`, and its
-  coefficient can be large. A constant column without an intercept is an ordinary column.
+  zero and its coefficient is `0`. The decision uses no tolerance. With `intercept = true`, a
+  column that is nearly constant but not constant, whose variation is small relative to its level,
+  has a small `sⱼ` relative to that level, hence a small penalty `λsⱼ` on `βⱼ`, and its
+  coefficient can be large. (Without `standardize_x`, `sⱼ = 1`; with it and without an
+  intercept, `sⱼ` is the root mean square of the raw column, which is large for a column of large
+  level.) A constant column without an intercept is an ordinary column.
 
 The problem is solved on the centred and scaled data: `Z` has the columns `(xⱼ - x̄ⱼ)/sⱼ`, `ỹ` is
 `y - ȳ` with an intercept and `y` without one, and the solver minimizes the unweighted lasso
@@ -72,7 +82,17 @@ The problem is solved on the centred and scaled data: `Z` has the columns `(xⱼ
 are not copied and the solver works on them. A keyword that is not `true` or `false`
 throws an `ArgumentError`. If a mean, a scale, an entry of `Z`, `β` or `β₀` is not finite (for
 example, entries of opposite signs near `floatmax(T)` that overflow when centred), an
-`ArgumentError` names `X` or `y` and the step.
+`ArgumentError` names `X` or `y` and the step. Standardization lets a design whose squares overflow
+(for example `Float32` columns near `1e20`) be fit, which the default call refuses, provided that
+the centring, the scales, the solve and the back-map are representable; centring can itself overflow
+(entries near `floatmax(T)` of both signs with a mean that is not zero are refused even with both
+keywords). The back-map `θⱼ/sⱼ` has a limit of representation: a coefficient whose exact value is
+below the range of `T` underflows (to a subnormal number or `0`), and the residuals on the original
+data, which use the stored `β`, then differ from those of the solver's problem. For example, with
+`X = reshape([-1e300, 1e300], 2, 1)`, `y = [-1e-100, 1e-100]`, `λ = 0` and `standardize_x = true`,
+the solver returns `θ = 1e-100` with minimum `0`, the stored coefficient is `0` (the exact value
+`1e-400` underflows) and `sum(abs2, residuals(fit))` is `2e-200`. The result of the solver is not
+altered.
 
 `n ≥ 1` is checked here. With a keyword set, so are `length(y) == n` and `p ≥ 1`, which
 ProximalSolvers checks on the default path, and the entries of `X` (and of `y` with an intercept)
@@ -84,8 +104,8 @@ The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is `
 solve is `ProximalSolvers.solve!`.
 
 The convergence report is ProximalSolvers' (`fit.result.converged`, `passes`, `maxchange`,
-`tolerance`, `minimum`); with `standardize_x = true` it is that of the solver's problem, in the
-coordinates `θ` (see [`LassoSolution`](@ref)). For this problem `converged` reports the
+`tolerance`, `minimum`); with a keyword set it is that of the solver's problem, in the coordinates
+`θ` (see [`LassoSolution`](@ref) for the units of `maxchange` and `tolerance`). For this problem `converged` reports the
 coefficient-change test of the solver (the largest change of a coefficient in a full pass, in the
 solver's scaling of the changes, against `tolerance`), not a bound on the distance to the minimum
 or on the KKT conditions. To check a fit, compute `x̃ⱼ'r/n` for the columns `x̃ⱼ` (`xⱼ - x̄ⱼ` with an
