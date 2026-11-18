@@ -34,7 +34,7 @@ module SqrtLassoTest
 # a factor 4 that absorbs the products of errors, are
 #   ‖Eⱼ‖ ≤ ζ_Z = 4G√n c̄(1 + m̄),   ‖ỹ̂ - ỹ‖ ≤ ζ_y = 4G(‖ỹ‖ + 2√n|ȳ|),
 #   √n|δ₀| ≤ Δ₀ = 2G√n(2|ȳ| + ‖ỹ‖/√n + c̄(1 + 3m̄)‖φ‖₁),   ‖φ - θ‖₁ ≤ 4G(1 + m̄)‖φ‖₁,
-# where the error of a mean enters through |x̄ⱼ| + rmsⱼ, and with both keywords false every one of these is
+# where the error of a mean enters through |x̄ⱼ| + rmsⱼ, and with both keywords false these terms are set to
 # zero (the stored problem is the raw problem). Hence ‖r_c - r̂‖ ≤ Δ = ζ_y + 2ζ_Z‖φ‖₁. The relative
 # difference of the level, from the rounding of λps = √n λ in Float64, is η_Λ = 4·2⁻⁵³. For the stored
 # point and the exact quantities N = ‖r_c‖, d = r_c/N, g = maxⱼ gⱼ, and the hatted ones of the transformed
@@ -98,7 +98,7 @@ dotb(a, b) = sum(a .* b)
 
 # the centred data and the weights of the objective: x̄, ȳ (zero without an intercept), the root mean
 # squares of the centred columns, and the weights s (those, or ones). The mean of a column whose entries
-# are all equal is that entry exactly (the sum of equal Float entries and the division are exact here).
+# are all equal is that entry (the sum of equal Float entries and the division are exact here).
 function reference(X, y, intercept::Bool, standardize::Bool)
   n, p = size(X)
   Xb, yb = BigFloat.(X), BigFloat.(y)
@@ -196,7 +196,7 @@ function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, ti
   b = dual_gap(X, y, fit.intercept, fit.coefficients, sqrt(BigFloat(n)) * BigFloat(λ);
                intercept = ic, standardize = st, eps_T = eps(T), pre = ic || st)
   if a === nothing || b === nothing
-    # a zero residual: the dual point is undefined, so the gap formula is silent; allowed only at an exact fit
+    # a zero residual: the dual point is undefined, so the gap formula is silent; the test takes this branch for a fit flagged exact_fit
     @test exact_fit
     return nothing
   end
@@ -228,7 +228,7 @@ function check_fields(fit, X::Matrix{T}, y, λ, ic) where T
   end
 end
 
-# same fields, including every field of the ProximalSolvers result (NaN equals NaN)
+# same fields, including all fields of the ProximalSolvers result (NaN equals NaN)
 function same_fit(a, b)
   fields(f) = (f.coefficients, f.intercept, f.hasintercept, f.residuals, f.λ, f.σ, f.result.minimizer,
                f.result.minimum, f.result.passes, f.result.converged, f.result.maxchange, f.result.tolerance,
@@ -462,9 +462,10 @@ end
   end
 
   @testset "an exact fit that reaches the uncertified stop, $T" for T in (Float32, Float64)
-    # dyadic data with y = 2 X[:, 1] exactly, cyclic order, standardize_x = false: the first visit sets
-    # β₁ = 2 with the residual exactly zero, and the certificate is undefined there (a zero residual with a
-    # nonzero coefficient), which needs λps < ‖X[:, 1]‖ so that the first visit does not set β₁ to 0
+    # dyadic data with y = 2 X[:, 1], cyclic order, standardize_x = false: the products and sums of the first
+    # visit are exact on dyadic data, so it sets β₁ = 2 with a zero residual, and the certificate is undefined
+    # there (a zero residual with a nonzero coefficient). This needs λps < ‖X[:, 1]‖, so that the first visit
+    # does not set β₁ to 0
     rng = Xoshiro(81)
     X = T.(rand(rng, -4:4, 8, 3)) ./ 4
     X[:, 1] .= T[1, 2, 3, -1, 2, 0.5, -2, 1]
@@ -483,7 +484,7 @@ end
     @test !f.result.converged && isnan(f.result.gap) && f.result.passes < 2000
     @test f.coefficients == T[0.5, 0] && f.intercept == 5 && iszero(f.residuals) && iszero(f.σ)
     # a generic exact fit from zero: certified (checked independently, where the residual is not zero) or not
-    # converged, and never a converged fit that fails the check
+    # converged; a converged fit has to pass the check
     for (ic, st) in COMBOS
       X, _ = problem(T, 82, 60, 8)
       y = X[:, 1:2] * T[1.5, -2.0]
@@ -542,7 +543,7 @@ end
       @test iszero(f.coefficients) && iszero(f.intercept) && f.result.converged && f.result.gap == 0
       @test f.result.passes == 1 && iszero(f.σ) && iszero(f.residuals)
     end
-    # a zero design: every column is flat, the solver keeps β at 0 and certifies it; with an intercept the fit is
+    # a zero design: all columns are flat, the solver keeps β at 0 and certifies it; with an intercept the fit is
     # the mean of the response and σ the root mean square of y - ȳ, without one σ is that of y
     X0 = zeros(T, n, p)
     for (ic, st) in COMBOS
@@ -583,7 +584,7 @@ end
     X32, y32 = problem(Float32, 132, n, p)
     @test_throws ArgumentError sqrt_lasso(X32, y32, 0.0f0)
     @test_throws ArgumentError sqrt_lasso(X32, y32, NaN32)
-    # a level that Float64 cannot represent: the level √n λ is not a finite positive Float64
+    # a level that is not representable in Float64: the level √n λ is not a finite positive Float64
     @test_throws ArgumentError sqrt_lasso(X, y, big"1e-400")
     err = try sqrt_lasso(X, y, big"1e-400"); nothing catch e e end
     @test occursin("not a finite positive Float64", sprint(showerror, err))

@@ -213,15 +213,15 @@ certificate: with a zero residual the dual direction is undefined. It logs its w
 
 ### Float32
 
-At the default `tol = 1e-7` the threshold of the certificate cannot tighten below the floor
+At the default `tol = 1e-7` the solver does not tighten the threshold of the certificate below the floor
 `16 eps(Float32)‖ỹ‖ ≈ 1.9e-6‖ỹ‖` for `Float32` data (the candidate `tol/100` is refused below it), so a
 run whose first certificate attempt fails ends without a certificate instead of continuing at a smaller
-threshold. The rounding of `Float32` coefficients can also keep the largest change of every full pass
+threshold. The rounding of `Float32` coefficients can also keep the largest change of each full pass
 above the threshold, and the run then ends at `maxpasses`. In both cases `converged` is `false`. The
 tests of this package set `tol = 1e-6` and `maxpasses = 2000` for `Float32` data, and accept a certified
 result, checked independently, or a run that reports itself not converged. Read `fit.result.converged`:
 a `Float32` fit that is not converged is not certified, and a converged one is certified for the
-transformed problem only.
+transformed problem, not for the original coordinates.
 
 ## The noise estimate
 

@@ -481,9 +481,9 @@ end
     function definition(b)
       yb, xb = BigFloat.(yq), BigFloat.(vec(Xq))
       r = (yb .- BigFloat(3) / 2) .- b .* xb         # the stored point has β₀ = 1.5, and the y above are Float64 numbers
-      rc = r .- sum(r) / 4                           # whose mean is 1.5 only to rounding: the residual is centred
+      rc = r .- sum(r) / 4                           # whose mean is within rounding of 1.5: the residual is centred
       N = sqrt(sum(abs2, rc))
-      g = abs(sum(xb .* rc)) / N                     # the mean of x is exactly 0
+      g = abs(sum(xb .* rc)) / N                     # the entries of x sum to 0 in floating point
       t = min(one(BigFloat), 2 * λb / g)
       D = t * sum(rc .* yb) / (2N)
       P = sqrt(sum(abs2, r)) / 2 + λb * abs(b)

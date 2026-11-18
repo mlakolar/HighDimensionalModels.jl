@@ -10,7 +10,7 @@ The fit returned by [`sqrt_lasso`](@ref), with fields
   at the returned point;
 - `λ::T`: the penalty level of [`sqrt_lasso`](@ref) (the normalized one), converted to `T`;
 - `σ::T`: the noise estimate `‖r‖/√n` for the residuals `r` above, the root mean square of the
-  residuals (`0` when every residual is zero), computed from the entries divided by a power of two
+  residuals (`0` when all residuals are zero), computed from the entries divided by a power of two
   not above the largest `|rᵢ|`, so that the squares in the sum are at most 4;
 - `result::R`: the ProximalSolvers result, unchanged. For `sqrt_lasso` it is a
   `ProximalSolvers.CDResults`.
@@ -18,9 +18,9 @@ The fit returned by [`sqrt_lasso`](@ref), with fields
 Two statements are kept apart, because they have different strengths.
 
 **Certification of the transformed problem.** `result.converged` and `result.gap` are those of
-ProximalSolvers and are not recomputed or changed here. `result.converged` is `true` only when
+ProximalSolvers and are not recomputed or changed here. `result.converged` is `true` when
 ProximalSolvers' duality certificate proved that the relative gap of the problem it solved is at most
-`1e-4`, and `result.gap` is that bound (rounded up in `T`). The problem it solved is
+`1e-4`, and `false` otherwise; `result.gap` is that bound (rounded up in `T`) where it is `true`. The problem it solved is
 `‖ỹ - Zθ‖ + √n λ ‖θ‖₁` for the stored matrix `Z` and vector `ỹ` in `T` (the centred and scaled data of
 [`sqrt_lasso`](@ref), or `X` and `y` themselves with both keywords false), at the point `θ`. In exact
 arithmetic its objective is `√n` times the objective of `sqrt_lasso`. With `result.converged == false`
@@ -150,8 +150,8 @@ function sqrt_lasso_level(λ::Real, n::Integer)
   λps
 end
 
-# σ = ‖r‖/√n, the root mean square of the residuals r, which must be finite; 0 when every entry of r
-# is zero (`root_mean_square` needs a nonzero entry)
+# σ = ‖r‖/√n, the root mean square of the residuals r, which must be finite; 0 when all entries of r
+# are zero (`root_mean_square` needs a nonzero entry)
 function noise_scale(r::Vector{T}) where T
   all(isfinite, r) || throw(ArgumentError(
     "sqrt_lasso: a residual on the original data is not finite in $T, so the noise estimate is undefined"))
