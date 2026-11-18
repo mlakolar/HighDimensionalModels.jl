@@ -674,7 +674,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       # from it and the solver needs more passes to meet its change test. The criteria below are empirical
       # regression criteria; no bound on the error of the rounded iteration is derived for them:
       #   * `passes > 5`: the curvature bound of a one-column group has the factor 1 + 2 n eps(T) = 1.24, so a pass
-      #     removes only part of the error. The converged runs took 22 to 24 passes without code coverage, 45 with
+      #     leaves part of the error. The converged runs took 22 to 24 passes without code coverage, 45 with
       #     bounds checking on Julia 1.10, and 85 with code coverage (as in CI).
       #   * `bound` = 0.038 for the error of the converged coefficient. The observed errors were 1.4e-5 to 2.9e-5
       #     without code coverage and 1.2e-4 with it. The value is 2 γₙ 0.3 + 2 tol with
