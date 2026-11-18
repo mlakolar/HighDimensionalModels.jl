@@ -143,21 +143,23 @@ The certificate of `dense-standardized` (`lasso_gap_standardized`) is stated for
 objective `‖y - β₀1 - Xβ‖²/(2n) + λ Σⱼ sⱼ|βⱼ|`, with `sⱼ` the root mean square of the
 centered column `xⱼ - x̄ⱼ`. A column whose entries are all equal has that value as its mean,
 centers to exact zeros and has scale 0, which the penalty ignores (a constant response is
-centered the same way). `P` is evaluated in Float64 on the raw inputs at the stored intercept
-`β₀` and coefficients `β` (not `coef(out)`, which has `p + 1` entries). The means, centered
-columns, scales and the dual point are computed in 256-bit BigFloat from the stored entries,
-with the terms added in a fixed order, independently of the package, so that no square
-underflows or overflows. The dual point is `tθ` with `θ = u/n` for the centered residual
-`u = r - r̄`, and `t` the largest value up to 1, rounded down to a Float64, with
-`|x̃ⱼ'(tθ)| ≤ λ sⱼ` in the original coordinates for the columns with `sⱼ > 0` (the others are
-zero after centering); the certificate is `ok` only if that holds to a relative `1e-12` (checked in
-BigFloat). The dual value is `D = t ỹ'θ - t² n‖θ‖²/2` for the
-centered response `ỹ`. In exact arithmetic the minimum of the problem over `β₀` is the minimum of
-the centered problem, so `D` bounds it from below; the computed gap is clamped as above. A
-shift `δ` of `β₀` from the profiled optimum for the fixed `β` raises `P` (by `δ²/2` when the
-residuals have mean zero), and with it the gap; a shift toward that optimum lowers it. A column
-that is not all zeros after centering whose scale is not a normal Float64 (it rounds to zero,
-is subnormal or is not finite) makes the case `uncertifiable`. The target is the relative gap
+centered the same way). After the stored Float64 inputs are read, all the arithmetic is in 256-bit
+BigFloat, independently of the package, with the terms added in a fixed order: the means, centered
+columns, scales, the primal value `P` on the raw inputs at the stored intercept `β₀` and
+coefficients `β` (not `coef(out)`, which has `p + 1` entries), the dual point and the dual value
+evaluated directly from it. Values are converted to Float64 only for the report. The dual point is
+`tθ` with `θ = u/n` for the centered residual `u = r - r̄`, and `t` the largest value up to 1 (reduced by a factor `1 - 2⁻²⁰⁰`
+when below 1) with `|x̃ⱼ'(tθ)| ≤ λ sⱼ` in the original coordinates for the columns with `sⱼ > 0`
+(the others are zero after centering); the certificate is `ok` only if that holds to a relative
+`1e-12` (checked in BigFloat). The dual value is `D = ỹ'(tθ) - n‖tθ‖²/2` for the centered response
+`ỹ`. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
+problem, so `D` bounds it from below; the computed gap is clamped as above. A shift `δ` of `β₀`
+from the profiled optimum for the fixed `β` raises `P` (by `δ²/2` when the residuals have mean
+zero) and with it the absolute duality gap; a shift toward that optimum lowers them (the relative
+gap need not change in the same direction). A column that is not all zeros after centering whose
+scale is not a normal Float64 (it rounds to zero, is subnormal or is not finite) makes the case
+`uncertifiable`, and so does a `P`, `D` or rounding scale that is not zero and not a normal
+Float64. The target is the relative gap
 `1e-6`, as for the other cases. `check_certificates.jl` builds a problem whose solution
 `(β₀, β)` is known by construction and shows that a perturbed `β₀` misses the target; it also
 checks a column whose squares underflow, the exact constant rule and the uncertifiable scales.

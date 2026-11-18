@@ -30,21 +30,22 @@
 # with sⱼ the root mean square of the centred column xⱼ - x̄ⱼ. A column whose
 # entries are all equal has that value as its mean, so that it centres to exact
 # zeros and has scale 0 (the penalty ignores it); a constant response is centred
-# in the same way. Means, centred columns, scales and the dual point are computed
-# here in 256-bit BigFloat from the stored Float64 entries, with the terms added
-# in a fixed order, so that no square underflows or overflows. Its primal value is
-# evaluated on the raw data at (β₀, β) in Float64. The dual point comes from the
-# centred and scaled problem; it is scaled down (rounding the scale down to a
-# Float64) so that |x̃ⱼ'θ| ≤ λ sⱼ in the original coordinates, for the columns with sⱼ > 0
-# (the others have x̃ⱼ = 0); this is checked in BigFloat, and the certificate is :ok only if
-# it holds to a relative 1e-12. A
-# column that is not all zeros after centring and whose scale is not a normal
-# Float64 (it rounds to zero, is subnormal, or is not finite) makes the
-# certificate :uncertifiable. The relative gap is as above. In exact arithmetic
-# the profiled minimum over β₀ is the minimum of the centred problem, so the dual
-# value bounds it from below; a perturbation of β₀ away from the profiled
-# optimum for the fixed slopes raises the primal value and with it the gap
-# (a perturbation toward it lowers it).
+# in the same way. After the stored Float64 inputs are read, all the arithmetic is
+# in 256-bit BigFloat, with the terms added in a fixed order: the means, centred
+# columns, scales, the primal value at (β₀, β) on the raw data, the dual point and
+# the dual value evaluated directly from it. Values are converted to Float64 only
+# for the report. The dual point comes from the centred and scaled problem; it is
+# scaled down so that |x̃ⱼ'θ| ≤ λ sⱼ in the original coordinates, for the columns
+# with sⱼ > 0 (the others have x̃ⱼ = 0); this is checked in BigFloat, and the
+# certificate is :ok only if it holds to a relative 1e-12. A column that is not all
+# zeros after centring and whose scale is not a normal Float64 (it rounds to zero, is
+# subnormal, or is not finite) makes the certificate :uncertifiable, and so does a
+# primal value, dual value or rounding scale that is not zero and not a normal
+# Float64. The relative gap is as above. In exact arithmetic the profiled minimum
+# over β₀ is the minimum of the centred problem, so the dual value bounds it from
+# below; a perturbation of β₀ away from the profiled optimum for the fixed slopes
+# raises the primal value and with it the absolute duality gap, and a perturbation
+# toward it lowers them (the relative gap need not change in the same direction).
 
 using LinearAlgebra
 
@@ -187,48 +188,58 @@ function centered_scaled(X)
   end
 end
 
-# P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ| for r = y - β₀ - Xβ, from the raw data in Float64. The dual
-# point is built from the centred residual u = r - r̄ (which sums to 0 in exact arithmetic):
-# θ = u/n, scaled to tθ with the largest t ≤ 1 (rounded down to a Float64) such that
-# |x̃ⱼ'(tθ)| ≤ λ sⱼ for the columns j with sⱼ > 0, the constraint in the original coordinates (the same as
-# |Zⱼ'(tθ)| ≤ λ for the scaled columns Zⱼ = x̃ⱼ/sⱼ). With the centred response ỹ the dual value
-# is D = t ỹ'θ - t² n‖θ‖²/2, a lower bound on the minimum of the centred problem by weak
-# duality. The sums for D, t and the feasibility `feasibility` = maxⱼ |x̃ⱼ'(tθ)|/(λ sⱼ) are
-# formed in BigFloat; `feasibility` ≤ 1 for a dual feasible point. Returns a String with the
-# reason when there is no certificate.
+# A BigFloat value as a Float64 for reporting: nothing if the value is not zero and is not a
+# normal Float64 (it rounds to zero or a subnormal number, or is not finite)
+function report64(x::BigFloat)
+  v = Float64(x)
+  (iszero(x) || (isfinite(v) && abs(v) >= floatmin(Float64))) ? v : nothing
+end
+
+# All arithmetic after reading the stored inputs is in 256-bit BigFloat, converted to Float64 only
+# for the reported values. With r = y - β₀ - Xβ, the primal value is P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ|
+# on the raw data. The dual point is built from the centred residual u = r - r̄ (which sums to 0
+# in exact arithmetic): θ = u/n, scaled to tθ with t = 1 if |x̃ⱼ'θ| ≤ λ sⱼ for the columns j with
+# sⱼ > 0, and otherwise the largest such t reduced by the factor 1 - 2⁻²⁰⁰, so that
+# |x̃ⱼ'(tθ)| ≤ λ sⱼ in the original coordinates (the same as |Zⱼ'(tθ)| ≤ λ for the scaled columns
+# Zⱼ = x̃ⱼ/sⱼ). With the centred response ỹ the dual value is D = ỹ'(tθ) - n‖tθ‖²/2, evaluated
+# directly from the dual point, a lower bound on the minimum of the centred problem by weak
+# duality. `feasibility` = maxⱼ |x̃ⱼ'(tθ)|/(λ sⱼ) is formed in BigFloat and is at most 1 for a
+# dual feasible point. `scale` is the sum of the magnitudes of the terms of P and D, for the
+# rounding bound of the relative gap. Returns a String with the reason when there is no
+# certificate, including when P, D or `scale` is nonzero and not a normal Float64.
 function lasso_standardized_parts(X, y, β₀, β, λ)
   d = cert_regression(X, y, β)
   d isa String && return d
   cert_finite(β₀) || return "nonfinite intercept"
   cert_finite(λ) && λ > 0 || return "λ must be finite and positive"
   (; X, y, β, n, p) = d
-  β₀, λ = f64(β₀), f64(λ)
   setprecision(BigFloat, 256) do
-    Xt, sb = centered_columns(X)
-    j = bad_scale(Xt, sb)
+    Xt, s = centered_columns(X)
+    j = bad_scale(Xt, s)
     j == 0 || return "the scale of column $j of X is not a normal Float64 (zero, subnormal or not finite)"
-    s = Float64.(sb)
-    fit = X * β
-    r = y .- β₀ .- fit
-    penalty = λ * dot(s, abs.(β))
-    P = dot(r, r) / (2n) + penalty
-    cert_finite(P, r) || return "nonfinite primal value"
-    ỹ = BigFloat.(y) .- exact_mean(y)
-    rb = BigFloat.(r)
-    θ = (rb .- exact_mean(r)) ./ n
+    λb, β₀b, yb, βb = BigFloat(λ), BigFloat(β₀), BigFloat.(y), BigFloat.(β)
+    fit = BigFloat.(X) * βb
+    r = yb .- β₀b .- fit
+    penalty = λb * sum(s[j] * abs(βb[j]) for j in 1:p)
+    P = sum(abs2, r) / (2n) + penalty
+    ỹ = yb .- exact_mean(y)
+    θ = (r .- exact_mean(r)) ./ n
     g = [sum(Xt[i, j] * θ[i] for i in 1:n) for j in 1:p]      # x̃ⱼ'θ, in the order of i
     t = one(BigFloat)
     for j in 1:p
-      iszero(sb[j]) && continue
-      abs(g[j]) > λ * sb[j] && (t = min(t, BigFloat(λ) * sb[j] / abs(g[j])))
+      iszero(s[j]) && continue
+      abs(g[j]) > λb * s[j] && (t = min(t, λb * s[j] / abs(g[j])))
     end
-    tf = Float64(t, RoundDown)
-    feasibility = maximum(j -> iszero(sb[j]) ? zero(BigFloat) : tf * abs(g[j]) / (BigFloat(λ) * sb[j]), 1:p)
-    θt = tf .* θ
-    D = tf * sum(ỹ[i] * θ[i] for i in 1:n) - tf^2 * n * sum(abs2, θ) / 2
-    scale = Float64(sum((abs(BigFloat(y[i])) + abs(β₀) + abs(fit[i]))^2 for i in 1:n) / (2n)) + penalty +
-            Float64(tf * sum(abs(ỹ[i]) * abs(θ[i]) for i in 1:n) + tf^2 * n * sum(abs2, θ) / 2)
-    (; P, D = Float64(D), θ = Float64.(θt), t = tf, feasibility = Float64(feasibility), scale, terms = max(n, p))
+    t < 1 && (t *= 1 - BigFloat(2)^-200)
+    θt = t .* θ
+    feasibility = maximum(j -> iszero(s[j]) ? zero(BigFloat) : t * abs(g[j]) / (λb * s[j]), 1:p)
+    D = sum(ỹ[i] * θt[i] for i in 1:n) - n * sum(abs2, θt) / 2
+    scale = sum((abs(yb[i]) + abs(β₀b) + abs(fit[i]))^2 for i in 1:n) / (2n) + penalty +
+            sum(abs(ỹ[i]) * abs(θt[i]) for i in 1:n) + n * sum(abs2, θt) / 2
+    P64, D64, scale64 = report64(P), report64(D), report64(scale)
+    (P64 === nothing || D64 === nothing || scale64 === nothing) &&
+      return "a value of the certificate (primal, dual or scale) is not a normal Float64"
+    (; P = P64, D = D64, θ = Float64.(θt), t = Float64(t), feasibility = Float64(feasibility), scale = scale64, terms = max(n, p))
   end
 end
 

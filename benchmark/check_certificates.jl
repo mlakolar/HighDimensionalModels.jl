@@ -176,6 +176,24 @@ end
   @test a.D ≈ 0.095 rtol = 1e-14
   @test a.t ≈ 0.1 rtol = 1e-14
   @test lasso_gap_standardized(Xu, yu, 0.0, [9e199], 0.1).value <= TIGHT      # the optimum
+  # a small t: with β = -1e150 the residuals are ∓1e150 and the dual point is scaled by t ≈ 1e-250
+  # (t² underflows in Float64). The reported D is the dual objective y'θ - n‖θ‖²/2 at the returned
+  # dual point, here about 5e-201 (the optimum: λ equals the amplitude of y, so β = 0 is optimal);
+  # it is compared with an independent evaluation in 512-bit BigFloat, to a relative 1e-12 (the
+  # returned θ is rounded to Float64, which changes D at second order at this point)
+  Xs, ys = reshape([-1.0, 1.0], 2, 1), [-1e-100, 1e-100]
+  a = lasso_standardized_parts(Xs, ys, 0.0, [-1e150], 1e-100)
+  @test a.t > 0 && a.t^2 == 0 && a.feasibility <= 1
+  D512 = setprecision(BigFloat, 512) do
+    θ512, y512 = BigFloat.(a.θ), BigFloat.(ys)
+    dot(y512, θ512) - length(ys) * dot(θ512, θ512) / 2
+  end
+  @test a.D > 0
+  @test abs(BigFloat(a.D) - D512) <= 1e-12 * abs(D512)
+  println("small-t control: t = $(a.t), D = $(a.D), 512-bit reference = $(Float64(D512)), relative difference = $(Float64(abs(BigFloat(a.D) - D512) / abs(D512)))")
+  c = lasso_gap_standardized(Xs, ys, 0.0, [-1e-100], 1e-100)
+  @test ok(c)
+  @test lasso_gap_standardized(Xs, ys, 0.0, [0.0], 1e-100).value <= TIGHT
   # the exact constant rule: a constant column has scale 0, also when the mean of its copies is not exact in floating point
   @test centered_scaled(fill(0.1, 10, 1))[2] == [0.0]
   @test centered_scaled(fill(1 / 3, 7, 2))[1] == zeros(7, 2)
