@@ -274,6 +274,14 @@ end
         ("a leading space in the jobs", "full", "all", " benchmark-integrity test"),
         ("none among jobs", "full", "all", "benchmark-integrity none test"),
         ("an unknown job", "full", "all", "benchmark-integrity deploy test"),
+        ("a padded none job list", "none", "none", " none "),
+        ("a job list with trailing space after none", "none", "none", "none "),
+        ("a job list with leading space before none", "none", "none", " none"),
+        ("a padded none selection", "none", " none ", "none"),
+        ("a selection with leading space before none", "none", " none", "none"),
+        ("a selection with trailing space after none", "none", "none ", "none"),
+        ("a padded all selection", "full", " all ", "benchmark-integrity test"),
+        ("a selection with trailing space after all", "full", "all ", "benchmark-integrity test"),
         ("an unknown level", "partial", "all", "test"),
         ("an empty level", "", "all", "test"))
       @test !isempty(pp(level, tests, jobs))

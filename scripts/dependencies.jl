@@ -164,10 +164,10 @@ manifest_names(v::VersionNumber = VERSION) =
 """
     manifest_file(env)
 
-The first of `manifest_names()` that exists in `env`. This is the manifest that Julia uses for
-`env/Project.toml` only when `check_project(env)` accepts the environment: a `manifest` key in
-the project, a `JuliaProject.toml`, or a `[workspace]` above `env` would make Julia use another
-file. `verify_manifest` also compares the file with Julia's own choice.
+The first of `manifest_names()` that exists in `env`. A `manifest` key in the project, a
+`JuliaProject.toml`, or a `[workspace]` above `env` can change which manifest Julia uses, so
+`check_project(env)` refuses them (a conservative rule), and `verify_manifest` compares this file
+with the one Julia selects.
 """
 function manifest_file(env)
   for name in manifest_names()
@@ -179,12 +179,13 @@ end
 """
     check_project(env)
 
-Throw if Julia would use a project or a manifest for `env` other than the `Project.toml` that the
-scripts edit and the manifest that `manifest_file` reads:
+Throw if `env` has a feature that can make Julia use another project or manifest than the
+`Project.toml` that the scripts edit and the manifest that `manifest_file` reads (a conservative
+rule):
 - `env` has a `JuliaProject.toml`, which Julia prefers to `Project.toml`;
-- `env/Project.toml` has a top-level `manifest` key, which names another manifest;
+- `env/Project.toml` has a top-level `manifest` key, which can name another manifest;
 - a `Project.toml` or `JuliaProject.toml` in a directory above `env` has a `[workspace]` table, so
-  that `env` could be one of its members, which share the workspace root's manifest.
+  that `env` could be one of its members, which can share the workspace root's manifest.
 A `[workspace]` table or `[sources]` entries in `env/Project.toml` itself are not refused: a
 workspace root keeps its manifest next to its project, and an entry in `[sources]` for a package
 that the scripts develop by path does not replace that path (the manifest check fails if it did).
@@ -195,14 +196,14 @@ function check_project(env)
   project = joinpath(env, "Project.toml")
   isfile(project) || error("$env has no Project.toml")
   haskey(TOML.parsefile(project), "manifest") &&
-    error("$project has a `manifest` key, which makes Julia use another manifest than the one checked; remove it")
+    error("$project has a `manifest` key, which can make Julia use another manifest than the one checked; remove it")
   dir = realpath(env)
   while dirname(dir) != dir
     dir = dirname(dir)
     for name in ("JuliaProject.toml", "Project.toml")
       file = joinpath(dir, name)
       isfile(file) && haskey(TOML.parsefile(file), "workspace") &&
-        error("$file has a [workspace] table above $env, whose members share the workspace's manifest; use a directory outside it")
+        error("$file has a [workspace] table above $env, whose members can share the workspace's manifest; use a directory outside it")
     end
   end
   return env

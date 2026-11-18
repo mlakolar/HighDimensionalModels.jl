@@ -453,8 +453,8 @@ function plan_problems(level::AbstractString, tests::AbstractString, jobs::Abstr
   words = split(jobs)
   if isempty(words)
     bad("the plan's job list is missing or empty; a plan without jobs says `$NONE`.")
-  elseif words != [NONE]
-    join(words, " ") == jobs || bad("the plan's job list `$jobs` is not single-space separated.")
+  elseif jobs != NONE
+    join(words, " ") == jobs || bad("the plan's job list `$jobs` is not `$NONE` or single-space separated names without leading or trailing space.")
     for j in words
       j in JOBS || bad("the plan names an unknown job `$j`.")
     end
