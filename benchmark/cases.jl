@@ -31,8 +31,7 @@ const HARNESS_SEED_SCHEME = "inputs: problems.jl scenario seeds by key and repet
   "solvers: Xoshiro from SHA-256 of solver, reset per sample; " *
   "order: Xoshiro from SHA-256 of measurement_order and repetition"
 
-# A Xoshiro generator whose state is the SHA-256 digest of parts, the same on
-# every Julia version
+# A Xoshiro generator whose state is four words of the SHA-256 digest of parts
 function harness_rng(parts...)
   digest = sha256(join(string.(parts), '/'))
   word(k) = foldl((h, b) -> (h << 8) | UInt64(b), digest[8k-7:8k]; init = UInt64(0))
@@ -127,8 +126,8 @@ function lasso_cases!(catalog)
       measure = MEASURE.gap, target = 1e-6,
       build = p -> lasso_inputs(p), call = lasso_call, certify = (p, s, out) -> lasso_certificate(s, out))
   end
-  # Float32 arithmetic limits the attainable relative gap to about 1e-6, and the
-  # stopping tolerance of the solver must lie above the rounding level.
+  # Float32 arithmetic limits the attainable relative gap; the target is 1e-4,
+  # and the solver's stopping tolerance is 1e-6 instead of its Float64 default.
   add_case!(catalog, "lasso", "lasso", "float32"; scenario = "ls-200x50", suite = "extended",
     measure = MEASURE.gap, target = 1e-4,
     build = p -> lasso_inputs(p; T = Float32, tol = 1e-6), call = lasso_call,
@@ -136,9 +135,10 @@ function lasso_cases!(catalog)
 end
 
 function control_cases!(catalog)
-  # One pass of coordinate descent cannot reach a 1e-8 gap: this case must end
-  # target_missed, with no timing-eligible sample. The solver warns that it
-  # stopped at its pass limit; the warning is silenced.
+  # One pass of coordinate descent is expected to leave a relative gap above 1e-8
+  # on this scenario: this case must end target_missed, with no timing-eligible
+  # sample. The solver warns that it stopped at its pass limit; the warning is
+  # silenced.
   add_case!(catalog, "controls", "lasso", "one-pass"; scenario = "ls-200x50",
     measure = MEASURE.gap, target = 1e-8,
     build = p -> begin

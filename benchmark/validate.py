@@ -25,11 +25,13 @@ STATUSES = ("ok", "target_missed", "uncertifiable", "timeout", "error")
 MEASURES = {"relative_gap", "kkt_residual"}
 RECORD = "record"
 # The sources of the loaded packages: ProximalBase and ProximalSolvers are
-# identified by commit, tree state and version, which must not change within a
-# series and, for a comparison, must agree between the series. The package
-# hash identifies the measured revision: constant within a series, free between series.
+# identified by commit and version, which must not change within a series and,
+# for a comparison, must agree between the series. A record from a dirty tree
+# (tracked or untracked changes) is invalid, since a commit does not identify
+# such a tree. The package hash identifies the measured revision, which may be
+# dirty: constant within a series, free between series.
 SOURCES = ("proximalbase", "proximalsolvers")
-SOURCE_FIELDS = tuple(f"{name}_{field}" for name in SOURCES for field in ("sha", "dirty", "version"))
+SOURCE_FIELDS = tuple(f"{name}_{field}" for name in SOURCES for field in ("sha", "version"))
 SERIES_SETTINGS = (
     "suite", "groups", "harness_hash", "julia_threads", "blas_threads", "blas",
     "cpu_model", "samples_target", "seconds_limit", "case_seconds", "profile_seconds",
@@ -177,6 +179,8 @@ def check_metadata(meta, version, rep, final=True):
     for key in ("package", *SOURCES):
         if not isinstance(meta[f"{key}_dirty"], bool):
             raise ValueError(f"{key}_dirty must be boolean")
+        if key in SOURCES and meta[f"{key}_dirty"]:
+            raise ValueError(f"{key}_dirty must be false: a dirty source tree is not identified by its commit")
         for field in ("path", "version"):
             if not isinstance(meta[f"{key}_{field}"], str) or not meta[f"{key}_{field}"]:
                 raise ValueError(f"malformed provenance field: {key}_{field}")

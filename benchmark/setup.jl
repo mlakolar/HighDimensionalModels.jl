@@ -43,6 +43,22 @@ function checkout(name, root, uuids)
   root
 end
 
+# A dependency checkout must be the root of a git repository without tracked or
+# untracked changes, so that its commit identifies the code that is measured.
+function require_clean(name, root)
+  git(args...) = readchomp(pipeline(`git -C $root $args`; stderr = devnull))
+  top = try
+    realpath(git("rev-parse", "--show-toplevel"))
+  catch
+    error("the $name checkout $root is not a git checkout; use a clean checkout of $name")
+  end
+  top == root || error("the $name checkout $root is not the root of its git repository ($top is)")
+  changes = git("status", "--porcelain", "--untracked-files=all")
+  isempty(changes) ||
+    error("the $name checkout $root has tracked or untracked changes:\n$changes\n" *
+          "commit or remove them, or use a clean checkout of $name")
+end
+
 function setup_environment(args)
   length(args) in (4, 5) ||
     error("usage: julia benchmark/setup.jl PACKAGE_ROOT ENV_DIR PROXIMALBASE_CHECKOUT " *
@@ -54,6 +70,7 @@ function setup_environment(args)
                SOURCES[1] => checkout(SOURCES[1], args[3], uuids),
                SOURCES[2] => checkout(SOURCES[2], args[4], uuids))
   length(unique(values(roots))) == 3 || error("the three checkouts must be different directories")
+  foreach(name -> require_clean(name, roots[name]), SOURCES)
   reference = length(args) == 5 ? manifest_path(realpath(args[5])) : nothing
   target = joinpath(environment, "Project.toml")
   ispath(target) && error("Refusing an existing ENV_DIR/Project.toml")

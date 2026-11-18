@@ -29,7 +29,11 @@ python3 benchmark/summarize.py benchmark/results benchmark/results/summary
 `benchmark/Project.toml` and develops the three checkouts into it by path with
 explicit `Pkg.develop` calls, which also work on Julia 1.10. It fails unless the
 manifest tracks exactly those three packages by path and each resolves to its
-given checkout, and it refuses an existing `ENV_DIR/Project.toml`. The runner
+given checkout, and it refuses an existing `ENV_DIR/Project.toml`. It also refuses a
+ProximalBase or ProximalSolvers checkout that is not the root of a git
+repository or has tracked or untracked changes (`git status --porcelain
+--untracked-files=all` not empty): commit the changes or use a clean checkout.
+The runner
 needs one Julia thread, and sets one BLAS thread itself. The default is one
 quick Float64 repetition: an exploratory check, with no between-run interval.
 Use a fresh output directory for each measurement series; the runner stops
@@ -46,7 +50,7 @@ instead of writing over records with the same file prefix.
 | `HDM_SECONDS` | `1` quick; `3` extended | Limit on the accumulated timed seconds of a case. |
 | `HDM_CASE_SECONDS` | `60` | Limit on a single compiled call; see `timeout` below. |
 | `HDM_PROFILE_SECONDS` | `0` | Positive values write diagnostic profiles of each `ok` case. |
-| `HDM_EXPECTED_PACKAGE_ROOT` | Unset | The HighDimensionalModels checkout that must be loaded, verified before any case is built. |
+| `HDM_EXPECTED_PACKAGE_ROOT` | Unset | The HighDimensionalModels checkout that must be loaded, verified before any case is built. The runner also refuses to measure, with exit 3 and before any case is built, when the loaded ProximalBase or ProximalSolvers is not the root of a git checkout or has tracked or untracked changes. |
 | `HDM_LIST` | `false` | `true` prints the selected case ids, suites and targets, and exits. |
 
 A case id is `group/estimator/variant`. For example, list the extended cases
@@ -73,16 +77,24 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 `problems.jl` draw columns with shifted means and scales and a response with an
 intercept, so a case prepares its inputs, untimed: the columns are centered and
 scaled to mean square one, the response is centered, and the penalty level is
-`λ = 0.1 λmax` with `λmax = maxⱼ |xⱼ'y|/n` of those inputs (Float32 cases round
-the Float64 inputs and level). In these coordinates the earlier lasso with an
-intercept and standardization solved the same scenarios at the same ratio
-`λ/λmax`. The solver is `CDSolver(rng = Xoshiro(...))` with the package's
-defaults otherwise (random coordinate order, `tol = 1e-7`; `tol = 1e-6` for
-Float32, because a smaller tolerance lies below its rounding level), its
-generator a Xoshiro seeded from a SHA-256 digest (`harness_rng("solver")`) and
-restarted for each sample.
-At these settings every case meets its target in the repetitions 1–10 on Julia
-1.10.13 and 1.13.4 (the largest relative gap is `4.2e-7`, on `wide`).
+`λ = 0.1 λmax` with `λmax = maxⱼ |xⱼ'y|/n` of those inputs. For the Float32 case
+the standardized Float64 inputs are rounded to Float32 first, `λmax` is computed
+from the rounded inputs (in Float64), and the level is rounded to Float32. In
+these coordinates the earlier lasso with an intercept and standardization
+solved the same scenarios at the same ratio `λ/λmax`. The solver is
+`CDSolver(rng = Xoshiro(...))` with the package's defaults otherwise (random
+coordinate order, `tol = 1e-7`); the Float32 case sets `tol = 1e-6`. The
+generator is a Xoshiro seeded from a SHA-256 digest (`harness_rng("solver")`)
+and restarted for each sample.
+
+Observation, not a guarantee: with ProximalBase
+`13891ccfd5c33a042c5df82d670abf1f2d786a0f` and ProximalSolvers
+`dac9f4b6819d9321117ee3cf3549e9e46a043f01`, on Julia 1.10.13 and 1.13.4, the six
+lasso cases `dense`, `tall`, `wide`, `correlated`, `large` and `float32` met
+their targets in each of the repetitions 1 to 10. The largest relative gap among the
+five Float64 cases was `4.2e-7` (`wide`), and `4.0e-7` for `float32`. The control ends
+`target_missed` (relative gap about `0.25` in repetition 1). Other dependency
+commits can give other values.
 
 The cases correspond to those of `legacy/full` as follows. The targets are the
 earlier ones.
@@ -90,27 +102,30 @@ earlier ones.
 | Earlier case | Case now | Change |
 |---|---|---|
 | `lasso/lasso/dense-standardized` | `lasso/lasso/dense` | Inputs prepared as above instead of `intercept = true, standardize_x = true`. |
-| `lasso/lasso/wide`, `correlated`, `large` | the same ids | The same. |
+| `lasso/lasso/wide`, `correlated`, `large` | the same ids | Inputs prepared as above. |
 | `lasso/lasso/gram-tall` | `lasso/lasso/tall` | The Gram option does not exist; the plain call. |
-| `lasso/lasso/float32` | the same id | The same. |
+| `lasso/lasso/float32` | the same id | Inputs prepared as above, then rounded to Float32. |
 | `controls/lasso/max-iter-1` | `controls/lasso/one-pass` | `CDSolver(maxpasses = 1)`; the solver's warning is silenced. |
 | `sparse-csc`, `weights-offset`, `sqrt_lasso`, `scaled_lasso`, `LassoPath`, `refit_lasso_path`, and every other group | none | The package has no such estimator, storage or option. |
 
 ## Certificates and targets
 
 `problems.jl` draws the inputs of each scenario from Xoshiro streams seeded by
-its key and the repetition, the same on every supported Julia version.
+its key and the repetition, using scalar draws only.
 `certificates.jl` states the objective of `lasso`, `‖y - Xβ‖²/(2n) + λ‖β‖₁`, and
 computes the certificate from the arrays it is given: the prepared inputs, the
 penalty level and the coefficient vector that the case takes from the returned
 fit. The cases pass no other field of the fit, and nothing in the harness reads
-a field of ProximalBase or ProximalSolvers. The certificate is the relative duality gap `(P - D)/|P|`,
-where `P` is the objective at the returned coefficients and `D` is the dual
-value at the point `t r/n` of the residuals `r = y - Xβ`, scaled by
-`t = min(1, λ/‖X'r/n‖∞)` to be dual feasible; `D` is a lower bound on the
-minimum, so a nonoptimal point has a positive gap. A violation of weak duality
-beyond rounding makes the case `uncertifiable`. For `λ = 0` the certificate is
-the KKT residual of the least squares. `check_certificates.jl` tests it with
+a field of ProximalBase or ProximalSolvers. The certificate is the relative
+duality gap `(P - D)/|P|`, where `P` is the objective at the returned
+coefficients and `D` is the dual value at the point `tθ`, `θ = r/n` for the
+residuals `r = y - Xβ`, with `t = min(1, λ/‖X'θ‖∞)` so that the point is dual
+feasible: `D = t y'θ - t² n‖θ‖²/2`. `D` is a lower bound on the minimum, so in
+exact arithmetic a nonoptimal point has a positive gap; the computed gap is
+clamped to zero when it is negative by less than a rounding bound, and a more
+negative one (a violation of weak duality) makes the case `uncertifiable`. For
+`λ = 0` the certificate is the KKT residual `‖X'r/n‖∞` of the least squares,
+relative to `max(1, ‖X'y‖∞/n)`, because the scaled dual point is then zero. `check_certificates.jl` tests it with
 analytic problems, problems whose solution is known by construction,
 nonoptimal points, weak duality, dual feasibility and nonfinite inputs, and
 runs the `dense` and `float32` cases and the control once against their targets.
@@ -164,8 +179,8 @@ python3 benchmark/compare.py benchmark/results/before benchmark/results/after \
   benchmark/results/comparison --expected-runs "$runs"
 ```
 
-`compare.py` refuses series that differ in ProximalBase or ProximalSolvers;
-`summarize.py` summarizes each series separately.
+`compare.py` refuses series that differ in the commit or version of ProximalBase
+or ProximalSolvers; `summarize.py` summarizes each series separately.
 
 Choose `runs` from 1 to 10. Use the same suite, groups, sample and time limits,
 machine, and Julia and BLAS versions on both sides; different Julia versions need
@@ -181,11 +196,15 @@ maximum bytes with their changes. Single-run ratios are exploratory, and an
 interval containing one is inconclusive. A case with a non-`ok` repetition is
 excluded from the ratios, with its reasons in the report. Invalid records,
 missing repetitions, unmatched cases, or differences in settings, catalog,
-data hashes, the commit, tree state or version of ProximalBase or
-ProximalSolvers, or the versions and tree hashes of the other dependencies
-prevent a comparison. A dependency tracked by path has an empty tree hash and is
-compared by version only; the commits of ProximalBase and ProximalSolvers
-identify them.
+data hashes, the commit or version of ProximalBase or ProximalSolvers, or the
+versions and tree hashes of the other dependencies prevent a comparison. A
+dependency tracked by path has an empty tree hash and is compared by version
+only; the commits of ProximalBase and ProximalSolvers identify them. The
+tree of a dependency is identified by its commit only when it is clean, so a
+record whose ProximalBase or ProximalSolvers tree has tracked or untracked
+changes is invalid and cannot be compared. The measured HighDimensionalModels
+checkout may have changes; `package_hash` identifies its `Project.toml` and
+`src/`.
 
 ## Measurement and evidence
 
@@ -228,14 +247,18 @@ The metadata records the settings; the Julia, BLAS and CPU identity; and, for
 HighDimensionalModels (`package_*`), ProximalBase (`proximalbase_*`) and
 ProximalSolvers (`proximalsolvers_*`), the loaded path, the git commit of its
 checkout (`unavailable` where the path is not the root of a repository), whether
-tracked files differ from it (`*_dirty`) and the version. It also records
+the tree differs from it (`*_dirty`; untracked files count for ProximalBase and
+ProximalSolvers, tracked changes only for HighDimensionalModels) and the version.
+A record with `unavailable` or a dirty tree for ProximalBase or ProximalSolvers
+fails validation. It also records
 SHA-1 hashes of the package's `Project.toml` and `src/` (`package_hash`) and of
 the Julia files of this folder (`harness_hash`), and a `[dependencies]` table
 with the version and tree hash of every package of the manifest that is not a
 standard library, other than HighDimensionalModels (a package tracked by path
 has an empty tree hash). The SHA-256 `data_hash` of a case covers its scenario
 inputs and penalty level; for repetition 1 it is the same on Julia 1.10.13 and
-1.13.4 for every case, and `compare.py` requires equal hashes. The final metadata adds `cases`, `ok_cases`,
+1.13.4 for every case, and `compare.py` requires equal hashes. The final metadata
+adds `cases`, `ok_cases`,
 `nonok_cases`, `elapsed_s`, `maxrss_bytes` and `finished = true`; start
 metadata without it marks an interrupted process, which is kept and restarted
 in a fresh series.
@@ -260,7 +283,9 @@ Generated results, environments and profiles are ignored by Git.
 
 Linux CI runs these commands, in this order, from the package root, with
 `PROXIMALBASE_CHECKOUT` and `PROXIMALSOLVERS_CHECKOUT` the checkouts of the
-run's dependency commits and `julia` the Julia version of the job:
+run's dependency commits (clean checkouts: `setup.jl` and the runner refuse a
+ProximalBase or ProximalSolvers tree with changes) and `julia` the Julia version
+of the job:
 
 ```sh
 ENV_DIR="$RUNNER_TEMP/hdm-bench-env"
@@ -283,7 +308,8 @@ In order: the Python controls of the record tools; the environment; the
 certificate controls; the quick lasso case, which must end `ok` (the runner exits
 with 0); the validation of its records; the control case, which must end
 `target_missed` (the runner exits with 2); and the validation of its records.
-Each command fails the job when it exits with a nonzero status.
+Under `bash -e`, a failing command other than the guarded control run
+(`|| code=$?`) ends the sequence and fails the job.
 
 These checks test the correctness of the harness: the record tools, the
 certificate, the targets of the quick case and the control that must fail. No
