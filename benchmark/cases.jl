@@ -243,8 +243,8 @@ function group_cases!(catalog)
   group_certificate(s, out) = group_gap(s.X, s.y, out.intercept, out.coefficients, s.λ, s.groups, s.weights;
                                         orthonormal = s.orthonormal, target = GROUP_TARGET)
   # The tolerance of the solver is explicit. In a pilot on repetitions 1 to 10 (Julia 1.13.4) the stopping
-  # tolerance 1e-7 left relative gaps of at most 6e-8 with orthonormalization; without it 1e-7 left up to 7e-7
-  # (about 3 times the tolerance) and 1e-8 left at most 7e-8.
+  # tolerance 1e-7 left relative gaps of at most 6.3e-8 with orthonormalization; without it 1e-7 left up to 6.9e-7
+  # (about 3 times the tolerance) and 1e-8 left at most 7.3e-8.
   add_case!(catalog, "group", "group_lasso", "orthonormal"; scenario = "groups-200x60",
     measure = MEASURE.gap, target = GROUP_TARGET,
     build = p -> group_inputs(p; orthonormal = true, tol = 1e-7), call = group_call,

@@ -219,7 +219,7 @@ solution is `(1 - √n λ w/‖P_G ỹ‖) P_G ỹ`, with a relative gap of `49/
 objectives, nonoptimal points, weak duality and feasibility at random points, the zero solution at `λ ≥ λmax`, a
 nearly collinear group, rank-deficient groups and nonfinite inputs, and runs both cases once against their target.
 The solver's tolerance is explicit in each case: `1e-7` for `orthonormal` and `1e-8` for `none`, which left relative
-gaps of at most `6e-8` and `7e-8` in a pilot on repetitions 1 to 10 on Julia 1.13.4 (`1e-7` would leave `7e-7` for `none`).
+gaps of at most `6.3e-8` and `7.3e-8` in a pilot on repetitions 1 to 10 on Julia 1.13.4 (`1e-7` left up to `6.9e-7` for `none`).
 
 A coordinate-change test of the solver, such as `fit.result.converged`, is not
 an optimality certificate for this problem and decides no status.
