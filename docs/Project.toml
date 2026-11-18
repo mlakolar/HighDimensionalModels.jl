@@ -1,20 +1,9 @@
 [deps]
-HighDimensionalModels = "676596c9-8d02-4dfa-b091-57818f5febe0"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-KernelSmoothing = "724a8e84-0a16-41a9-ba90-78f60180b487"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
-Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+HighDimensionalModels = "676596c9-8d02-4dfa-b091-57818f5febe0"
 ProximalBase = "0a755509-c5b1-5d6f-9b24-59bcda3c37a3"
 ProximalSolvers = "fc4971f5-6616-4709-9bfc-89a819252f6b"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-
-[sources]
-HighDimensionalModels = {path = ".."}
-KernelSmoothing = {rev = "a99bcc9497d7997106d66ce837705fd70c055687", url = "https://github.com/mlakolar/KernelSmoothing.jl.git"}
 
 [compat]
 Documenter = "1"
-Literate = "2"

@@ -1,9 +1,10 @@
-# Which tests and CI jobs a change needs (test/impact.toml, test/testsuite.toml). Plain Julia:
-# TOML and the git command line, no package environment.
+# Which tests and CI jobs a change needs (test/impact.toml, test/testsuite.toml), and the rule of
+# the CI gate. Plain Julia: TOML and the git command line, no package environment.
 #
-#   julia scripts/ci_plan.jl                       local changes against origin/master
+#   julia scripts/ci_plan.jl                        local changes against origin/master
 #   julia scripts/ci_plan.jl --base=REV --head=REV  a range of commits
 #   julia scripts/ci_plan.jl --event=pull_request   in CI (see .github/workflows/CI.yml)
+#   julia scripts/ci_plan.jl --gate                 the gate job: reads the results from ENV
 #
 # It prints the plan and its reasons. With --github-output and --summary it also writes the CI
 # outputs and a Markdown job summary. When the changes or the tracked files cannot be determined
@@ -16,10 +17,10 @@ using TOML
 include(joinpath(@__DIR__, "..", "test", "testsuite.jl"))
 using .TestSuite
 
-const LEVELS = ("none", "focused", "broad", "full")
-const JOBS = ("test", "test-cross", "master-integration", "knockoff-extension", "examples")
-# A full plan runs these; test-cross (macOS, Windows) only on request or by rule.
-const FULL_JOBS = ["test", "master-integration", "knockoff-extension", "examples"]
+const LEVELS = ("none", "focused", "full")
+const JOBS = ("test", "test-cross", "benchmark-integrity")
+# A full plan runs these; test-cross (macOS, Windows) only for the nightly and manual runs.
+const FULL_JOBS = ["test", "benchmark-integrity"]
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 
 struct Rule
@@ -119,7 +120,6 @@ function validate(impact::Impact, inventory::TestSuite.Inventory, where)
     if r.level in ("none", "full") && !(isempty(r.families) && isempty(r.tests))
       push!(problems, "$ctx: a $(r.level) rule cannot also select families or tests")
     end
-    r.level == "none" && !isempty(r.jobs) && push!(problems, "$ctx: a none rule cannot add jobs")
   end
   # Every test can be reached from a source change (or runs with every plan).
   reachable = union(Set(impact.smoke), Set(impact.source), Set(Iterators.flatten(values(impact.families))))
@@ -130,14 +130,14 @@ function validate(impact::Impact, inventory::TestSuite.Inventory, where)
   return impact
 end
 
-ispackagecode(path) = startswith(path, "src/") || startswith(path, "ext/")
+ispackagecode(path) = startswith(path, "src/")
 
 """
     source_problems(impact, files) -> Vector{String}
 
-One message for each source or extension file in `files` whose rules, taken together, do not
-select its tests. The rules matching a file must include a full rule, or focused and broad rules
-naming at least one family or test between them; a rule that only adds jobs may accompany them.
+One message for each source file in `files` whose rules, taken together, do not
+select its tests. The rules matching a file must include a full rule, or focused rules naming at
+least one family or test between them; a rule that only adds jobs may accompany them.
 A none rule never covers package code. Otherwise a change to the file would run only the smoke
 test and the package-wide checks.
 """
@@ -157,13 +157,13 @@ end
 testname(path) = (m = match(r"^test/(.+)\.jl$", path)) === nothing ? nothing : String(m[1])
 
 """
-    plan(changes, impact, inventory; base_inventory=nothing, explicit_full=false)
+    plan(changes, impact, inventory)
 
-The plan for a list of changed paths. `base_inventory` is the test inventory before the change
-(`nothing` if unknown), used when test/testsuite.toml changed.
+The plan for a list of changed paths: the union of the rules matching each path. A path that
+no rule matches, a deleted or renamed source or test file, and an empty change set select the
+full suite.
 """
-function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inventory;
-              base_inventory::Union{Nothing,TestSuite.Inventory} = nothing, explicit_full::Bool = false)
+function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inventory)
   alltests = Set(TestSuite.alltests(inventory))
   level = "none"
   tests = Set{String}()
@@ -179,27 +179,10 @@ function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inve
     for (k, path) in enumerate(paths)
       deleted = c.status == 'D' || (c.status == 'R' && k == 1)
       matched = [r for r in impact.rules if any(g -> matches(g, path), r.paths)]
-      name = testname(path)
       why = String[]
-      if deleted && (ispackagecode(path) || name !== nothing)
+      if deleted && (ispackagecode(path) || testname(path) !== nothing)
         level = "full"
         push!(why, "$(c.status == 'R' ? "Renamed" : "Deleted") source or test file: the full suite runs.")
-      elseif path == "test/testsuite.toml"
-        added = inventory_additions(base_inventory, inventory)
-        if added === nothing
-          level = "full"
-          push!(why, "The test inventory changed beyond adding parallel test files: the full suite runs.")
-        else
-          level = maxlevel(level, "focused")
-          union!(tests, added)
-          push!(why, isempty(added) ? "The test inventory changed without changing what runs." :
-                     "The test inventory adds $(join(added, ", ")).")
-        end
-      elseif name !== nothing && name in alltests
-        # Itself, and whatever a rule for its directory adds (test/data/**).
-        level = maxlevel(level, "focused")
-        push!(tests, name)
-        push!(why, "Test file changed: it runs itself.")
       elseif isempty(matched)
         level = "full"
         push!(why, "No rule in test/impact.toml matches this path: the full suite runs. Add a rule.")
@@ -216,44 +199,31 @@ function plan(changes::Vector{Change}, impact::Impact, inventory::TestSuite.Inve
       push!(reasons, (path, join(why, " ")))
     end
   end
-  if explicit_full
-    level = "full"
-    push!(jobs, "test-cross")
-    push!(reasons, ("(request)", "Full validation was requested, on every platform."))
-  end
   if any(c -> ispackagecode(c.path), changes) && !any(c -> startswith(c.path, "test/"), changes)
     push!(notes, "Package code changed without a test change: say in the PR how the change is tested.")
   end
-  return finish(level, tests, jobs, reasons, notes, impact, changes, alltests; coverage = false)
+  return finish(level, tests, jobs, reasons, notes, impact, changes, alltests)
 end
 
-function finish(level, tests, jobs, reasons, notes, impact, changes, alltests; coverage)
+function finish(level, tests, jobs, reasons, notes, impact, changes, alltests)
   if level == "none"
-    return Plan("none", String[], String[], reasons, notes, false)
+    return Plan("none", String[], sort!(collect(jobs)), reasons, notes, false)
   elseif level == "full"
-    return Plan("full", nothing, sort!(collect(union(Set(jobs), FULL_JOBS))), reasons, notes, coverage)
+    return Plan("full", nothing, sort!(collect(union(Set(jobs), FULL_JOBS))), reasons, notes, true)
   end
   union!(tests, impact.smoke)
   any(c -> ispackagecode(c.path) || (c.status == 'R' && ispackagecode(c.old)), changes) && union!(tests, impact.source)
   push!(jobs, "test")
   selected = sort!(collect(tests))
   # A selection that covers every file is the full suite.
-  Set(selected) == alltests && return Plan(level, nothing, sort!(collect(jobs)), reasons, notes, coverage)
-  return Plan(level, selected, sort!(collect(jobs)), reasons, notes, coverage)
+  Set(selected) == alltests && return Plan(level, nothing, sort!(collect(jobs)), reasons, notes, true)
+  return Plan(level, selected, sort!(collect(jobs)), reasons, notes, false)
 end
 
-"The parallel test files added by the change, or `nothing` if it changed anything else."
-function inventory_additions(base, head)
-  base === nothing && return nothing
-  base.serial == head.serial && base.subprocess == head.subprocess && base.not_tests == head.not_tests || return nothing
-  issubset(base.parallel, head.parallel) || return nothing
-  return sort!(collect(setdiff(head.parallel, base.parallel)))
-end
-
-"The comprehensive plan of schedules, tags and requested full runs."
-function full_plan(why::AbstractString; cross::Bool, coverage::Bool = true)
+"The plan of the nightly and manual runs: the complete suite and every job, on every platform."
+function full_plan(why::AbstractString; cross::Bool = true)
   jobs = sort!(union(FULL_JOBS, cross ? ["test-cross"] : String[]))
-  Plan("full", nothing, jobs, [("(event)", String(why))], String[], coverage)
+  Plan("full", nothing, jobs, [("(event)", String(why))], String[], true)
 end
 
 # ---- git -----------------------------------------------------------------------------------
@@ -315,27 +285,6 @@ function changed_files(base::AbstractString, head::Union{Nothing,AbstractString}
   return changes
 end
 
-"The inventory at a revision, or `nothing` if it cannot be read."
-function inventory_at(rev::AbstractString; dir = ROOT)
-  text = git(["show", "$rev:test/testsuite.toml"]; dir)
-  text === nothing && return nothing
-  try
-    mktempdir() do tmp
-      path = joinpath(tmp, "testsuite.toml")
-      write(path, text)
-      TestSuite.load(path)
-    end
-  catch
-    nothing
-  end
-end
-
-"Whether the commit message of `rev` asks for full validation (a line `CI: full`)."
-function requests_full(rev::AbstractString; dir = ROOT)
-  message = git(["log", "-1", "--format=%B", rev]; dir)
-  message !== nothing && any(l -> strip(l) == "CI: full", split(message, '\n'))
-end
-
 # ---- output --------------------------------------------------------------------------------
 
 function describe(io::IO, p::Plan; markdown::Bool = false)
@@ -375,27 +324,33 @@ function option(args, name, default = nothing)
   return default
 end
 
+const EVENTS = ("local", "pull_request", "push", "schedule", "workflow_dispatch")
+
 """
     compute(args; dir, list_files = tracked_files) -> Plan
 
-`--event=` local (default), pull_request, push, schedule, workflow_dispatch or tag;
-`--base=`/`--head=` the revisions to compare; `--schedule=` nightly or weekly; `--full`.
+`--event=` local (default), pull_request, push, schedule or workflow_dispatch; `--base=` and
+`--head=` the revisions to compare (the default for a local run is the merge base with
+origin/master and the working tree). A schedule or workflow_dispatch event plans the complete
+suite on every platform without looking at changes.
 
 Throws if a test file is unclassified, the map is invalid, or a source file's rules select no
 tests. If `list_files(dir)` returns `nothing` (git cannot list the tracked files), that last
 check cannot be made and the plan is the full suite.
 """
 function compute(args; dir = ROOT, list_files = tracked_files)
+  event = option(args, "event", "local")
+  event in EVENTS || error("--event must be one of $(join(EVENTS, ", ")), not `$event`")
   inventory = TestSuite.load(joinpath(dir, "test", "testsuite.toml"))
   TestSuite.check(inventory, TestSuite.discover(joinpath(dir, "test")))
   impact = load_impact(joinpath(dir, "test", "impact.toml"), inventory)
   files = list_files(dir)
   if files === nothing
-    return audit_failed(plan_event(args, impact, inventory, dir))
+    return audit_failed(plan_event(event, args, impact, inventory, dir))
   end
   problems = source_problems(impact, files)
   isempty(problems) || error("test/impact.toml does not select tests for every source file:\n  " * join(problems, "\n  "))
-  return plan_event(args, impact, inventory, dir)
+  return plan_event(event, args, impact, inventory, dir)
 end
 
 const AUDIT_FAILED = "git could not list the tracked files, so the source files were not checked against test/impact.toml: the full suite runs."
@@ -403,33 +358,82 @@ const AUDIT_FAILED = "git could not list the tracked files, so the source files 
 "`p` widened to the full suite because the source-map check could not be made."
 function audit_failed(p::Plan)
   jobs = sort!(union(p.jobs, FULL_JOBS))
-  Plan("full", nothing, jobs, vcat([("(source map check)", AUDIT_FAILED)], p.reasons), vcat([AUDIT_FAILED], p.notes), p.coverage)
+  Plan("full", nothing, jobs, vcat([("(source map check)", AUDIT_FAILED)], p.reasons), vcat([AUDIT_FAILED], p.notes), true)
 end
 
-function plan_event(args, impact, inventory, dir)
-  event = option(args, "event", "local")
-  if event == "schedule"
-    schedule = option(args, "schedule", "")
-    schedule in ("nightly", "weekly") || error("--schedule must be nightly or weekly")
-    return full_plan("The $schedule run tests every file."; cross = schedule == "weekly")
-  elseif event == "tag"
-    return full_plan("A tag is a release: every file on every platform."; cross = true)
-  elseif "--full" in args
-    return full_plan("Full validation was requested."; cross = true)
-  end
+function plan_event(event, args, impact, inventory, dir)
+  event == "schedule" && return full_plan("The nightly run tests every file on every platform.")
+  event == "workflow_dispatch" && return full_plan("A manual run tests every file on every platform.")
   base = option(args, "base", event == "local" ? something(git(["merge-base", "origin/master", "HEAD"]; dir), "origin/master") : nothing)
   head = option(args, "head", event == "local" ? nothing : "HEAD")
   head = head == "" ? nothing : head
-  base === nothing && return full_plan("No base revision to compare with: the full suite runs."; cross = false, coverage = false)
+  base === nothing && return full_plan("No base revision to compare with: the full suite runs."; cross = false)
   changes = changed_files(strip(base), head === nothing ? nothing : strip(head); dir)
   if changes === nothing
-    return full_plan("The changed files could not be determined (base `$base`): the full suite runs."; cross = false, coverage = false)
+    return full_plan("The changed files could not be determined (base `$base`): the full suite runs."; cross = false)
   end
-  explicit = head !== nothing && requests_full(option(args, "request-sha", head); dir)
-  return plan(changes, impact, inventory; base_inventory = inventory_at(strip(base); dir), explicit_full = explicit)
+  return plan(changes, impact, inventory)
+end
+
+# ---- gate ----------------------------------------------------------------------------------
+
+"""
+    verdict(plan_result, plan_ok, plan_jobs, results) -> (passed, lines)
+
+The required check of a CI run. It passes only if the plan job succeeded and wrote its outputs,
+every job the plan required succeeded, and every other job was skipped: a job that ran without
+being required is a mismatch between the plan and the workflow.
+`results` maps each CI job to its `needs.<job>.result`; a job missing from it fails the check.
+"""
+function verdict(plan_result::AbstractString, plan_ok::AbstractString, plan_jobs::AbstractString,
+                 results::AbstractDict)
+  lines = String[]
+  fail(msg) = push!(lines, "FAIL: " * msg)
+  plan_result == "success" || fail("the plan job ended with `$(isempty(plan_result) ? "no result" : plan_result)`.")
+  plan_ok == "true" || fail("the plan did not write a complete plan.")
+  required = split(plan_jobs)
+  for j in required
+    j in JOBS || fail("the plan names an unknown job `$j`.")
+  end
+  for j in JOBS
+    r = get(results, j, "")
+    if j in required
+      r == "success" ? push!(lines, "ok: $j (required) succeeded.") : fail("$j is required, but its result is `$(isempty(r) ? "missing" : r)`.")
+    elseif r == "skipped"
+      push!(lines, "ok: $j (not required) was skipped.")
+    else
+      fail("$j was not required and should have been skipped, but its result is `$(isempty(r) ? "missing" : r)`.")
+    end
+  end
+  for j in sort!(collect(keys(results)))
+    j in JOBS || fail("unexpected job `$j` in the results: update CIPlan.JOBS.")
+  end
+  return !any(l -> startswith(l, "FAIL"), lines), lines
+end
+
+"The gate job: reads PLAN_RESULT, PLAN_OK, PLAN_JOBS and RESULTS (`job=result` words) from ENV."
+function gate()
+  results = Dict{String,String}()
+  for word in split(get(ENV, "RESULTS", ""))
+    k, v = occursin('=', word) ? split(word, '='; limit = 2) : (word, "")
+    results[k] = v
+  end
+  passed, lines = verdict(get(ENV, "PLAN_RESULT", ""), get(ENV, "PLAN_OK", ""), get(ENV, "PLAN_JOBS", ""), results)
+  foreach(println, lines)
+  println(passed ? "Every job the plan required passed." : "The required jobs did not all pass.")
+  summary = get(ENV, "GITHUB_STEP_SUMMARY", "")
+  isempty(summary) || open(summary, "a") do io
+    println(io, "### Gate: ", passed ? "passed" : "failed", "\n")
+    foreach(l -> println(io, "- ", l), lines)
+  end
+  return passed
 end
 
 function main(args)
+  if "--gate" in args
+    gate() || exit(1)
+    return nothing
+  end
   p = compute(args)
   describe(stdout, p)
   out = option(args, "github-output")

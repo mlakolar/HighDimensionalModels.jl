@@ -115,15 +115,10 @@ end
 @testset "this repository's inventory" begin
   inv = TS.load(joinpath(@__DIR__, "testsuite.toml"))
   @test TS.check(inv, TS.discover(@__DIR__)) === nothing
-  @test "testsuite_validation" in inv.parallel
-  @test inv.subprocess["deprecated"] == ["--depwarn=yes"]
-  @test inv.subprocess["extensions_absent"] == ["--depwarn=error"]
-  # Fixture and helper files are named one by one.
-  for name in TS.discover(@__DIR__)
-    if startswith(name, "data/") || startswith(name, "golden/")
-      @test haskey(inv.not_tests, name)
-    end
-  end
+  @test TS.alltests(inv) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_reference", "smoke", "statsapi", "testsuite_validation"]
+  @test isempty(inv.serial) && isempty(inv.subprocess)
+  # Helpers and fixtures are named one by one, with a reason.
+  @test Set(keys(inv.not_tests)) == Set(["testsuite"])
 end
 
 @testset "test expressions" begin
@@ -181,6 +176,39 @@ end
   @test TS.max_workers(2) == max(1, TS.cpu_threads() ÷ 2)
 end
 
+@testset "the runner's report is checked against the selection" begin
+  table(names) = ["HighDimensionalModels tests: a selection, $(length(names)) of 8 files",
+                  "  workers: 2 Julia threads and 1 BLAS thread each",
+                  TS.SELECTION_PREFIX * join(names, " "),
+                  "Running $(length(names)) tests using 2 parallel jobs.",
+                  "                   │   Test   │ ──────────────── CPU ──────────────── │",
+                  "Test      (Worker) │ time (s) │ GC (s) │ GC % │ Alloc (MB) │ RSS (MB) │",
+                  ["$(rpad(name, 14)) ($i) │     0.46 │   0.01 │  2.5 │      53.32 │   394.35 │" for (i, name) in enumerate(names)]...,
+                  "", "Test Summary: | Pass  Total  Time", "  Overall     |    4      4  4.2s", "    SUCCESS"]
+  @test TS.check_run(table(["lasso", "smoke"])) == ["lasso", "smoke"]
+  @test TS.check_run(table(["lasso", "smoke"]), ["smoke", "lasso"]) == ["lasso", "smoke"]
+  # Colored output (CI runs with --color=yes) and the detail lines of --verbose.
+  colored = replace.(table(["lasso", "smoke"]), "lasso   " => "\e[32mlasso\e[39m   ")
+  @test TS.check_run(colored) == ["lasso", "smoke"]
+  verbose = vcat(table(["lasso"])[1:6], ["lasso          (1) │         started at 2026-11-17T17:55:48.954"], table(["lasso"])[7:end])
+  @test TS.check_run(verbose) == ["lasso"]
+  # The selection differs from the expectation, is missing, is empty, or is printed twice.
+  @test occursin("selected lasso, expected lasso smoke", message(() -> TS.check_run(table(["lasso"]), ["lasso", "smoke"])))
+  @test occursin("selected lasso smoke, expected lasso", message(() -> TS.check_run(table(["lasso", "smoke"]), ["lasso"])))
+  @test occursin("found 0", message(() -> TS.check_run(filter(l -> !startswith(l, TS.SELECTION_PREFIX), table(["lasso"])))))
+  @test occursin("selected no test file", message(() -> TS.check_run(table(String[]))))
+  @test occursin("found 2", message(() -> TS.check_run(vcat(table(["lasso"]), table(["lasso"])))))
+  # A selected file the runner did not report, whether the table is short or absent.
+  short = table(["lasso", "smoke"])
+  short[3] = TS.SELECTION_PREFIX * "lasso smoke statsapi"
+  @test occursin("not reported by the runner: statsapi", message(() -> TS.check_run(short)))
+  @test occursin("not reported by the runner: lasso", message(() -> TS.check_run(table(["lasso"])[1:3])))
+  # A name that only prefixes a reported file does not count.
+  prefix = table(["lasso_reference"])
+  prefix[3] = TS.SELECTION_PREFIX * "lasso"
+  @test occursin("not reported by the runner: lasso", message(() -> TS.check_run(prefix)))
+end
+
 # A child Julia in this test environment, without coverage (later flags win).
 julia(args...) = Cmd([Base.julia_cmd().exec..., "--startup-file=no", "--code-coverage=none",
                       "--project=" * dirname(Base.active_project()), args...])
@@ -220,7 +248,7 @@ end
   runtests = joinpath(@__DIR__, "runtests.jl")
   code, out = output(julia(runtests, "--list"))
   @test code == 0
-  @test occursin("testsuite_validation", out) && occursin("lowrank_sparse", out)
+  @test occursin("testsuite_validation", out) && occursin("lasso_reference", out)
   code, out = output(julia(runtests, "--only=lasso,no_such_test"))
   @test code != 0
   @test occursin("--only: no test file no_such_test", out)
