@@ -128,7 +128,7 @@ end
 
   @testset "the inventory" begin
     base = INVENTORY
-    @test TS.alltests(base) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_intercept", "lasso_reference", "smoke", "statsapi", "testsuite_validation"]
+    @test TS.alltests(base) == ["aqua", "ci_plan", "dependencies", "lasso", "lasso_intercept", "lasso_reference", "smoke", "sqrt_lasso", "statsapi", "testsuite_validation"]
     @test isempty(base.serial) && isempty(base.subprocess)
     # The checks of the inventory itself.
     @test_throws ErrorException TS.check(INVENTORY, vcat(TS.discover(@__DIR__), ["brand_new"]))
