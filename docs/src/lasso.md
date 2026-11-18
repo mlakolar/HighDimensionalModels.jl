@@ -27,7 +27,7 @@ centred column with an intercept, the column itself without. With the
 weights, `β = 0` (with `β₀ = ȳ`, or `0` without an intercept) is a minimizer in exact arithmetic
 if and only if `λ ≥ λmax = maxⱼ |x̃ⱼ'ỹ| / (n sⱼ)` over the columns with `sⱼ > 0`, where `x̃ⱼ` and
 `ỹ` are the centred (or raw, without an intercept) column and response; `λmax = 0` when no column has
-a positive scale (the fit is then zero for every `λ ≥ 0`).
+a positive scale (the slopes are then zero for every `λ ≥ 0`; the intercept can still be nonzero).
 
 The call solves an ordinary unweighted lasso on transformed data. Let `ȳ` be the mean of `y`
 (`0` without an intercept), `Z` the matrix with the columns `(xⱼ - x̄ⱼ)/sⱼ` (`xⱼ - x̄ⱼ` without
@@ -139,7 +139,7 @@ With `intercept = true` or `standardize_x = true`, `fit.result` is the result of
 on the transformed problem `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`. With `standardize_x = true`,
 `fit.result.minimizer` is `θ`, and not `coefficients` (in exact arithmetic `θⱼ = sⱼ βⱼ` for the
 mathematical back-map `βⱼ = θⱼ/sⱼ`; the stored slopes are the rounded divisions, with `0` for a column
-of scale `0`, and `θⱼ = sⱼ βⱼ` need not hold for them, see the limit of the back-map below) (with `intercept = true`
+of scale `0`, and `θⱼ = sⱼ βⱼ` need not hold for them, see the limit of the back-map above) (with `intercept = true`
 alone, `θ = β` and the two are the same vector); `fit.result.minimum` is
 `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁`, which equals the weighted objective above at `(β₀, β)` in exact
 arithmetic, not the plain lasso objective of `β`.
