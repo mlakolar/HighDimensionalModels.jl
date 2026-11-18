@@ -1,9 +1,0 @@
-lambda0,0.009943491188941883
-objective,0.216037582908729
-iterations,12
-tolerance,1e-11
-lambda_tilde,0.21081778870674897
-lambda_tilde_max,0.70272596235583
-correction_objective,0.33375662620381197
-correction_iterations,8
-correction_tolerance,1e-11
