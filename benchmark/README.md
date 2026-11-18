@@ -143,26 +143,43 @@ The certificate of `dense-standardized` (`lasso_gap_standardized`) is stated for
 objective `‖y - β₀1 - Xβ‖²/(2n) + λ Σⱼ sⱼ|βⱼ|`, with `sⱼ` the root mean square of the
 centered column `xⱼ - x̄ⱼ`. A column whose entries are all equal has that value as its mean,
 centers to exact zeros and has scale 0, which the penalty ignores (a constant response is
-centered the same way). After the stored Float64 inputs are read, all the arithmetic is in 256-bit
-BigFloat, independently of the package, with the terms added in a fixed order: the means, centered
-columns, scales, the primal value `P` on the raw inputs at the stored intercept `β₀` and
-coefficients `β` (not `coef(out)`, which has `p + 1` entries), the dual point and the dual value
-evaluated directly from it. Values are converted to Float64 only for the report. The dual point is
-`tθ` with `θ = u/n` for the centered residual `u = r - r̄`, and `t` the largest value up to 1 (reduced by a factor `1 - 2⁻²⁰⁰`
-when below 1) with `|x̃ⱼ'(tθ)| ≤ λ sⱼ` in the original coordinates for the columns with `sⱼ > 0`
-(the others are zero after centering); the certificate is `ok` only if that holds to a relative
-`1e-12` (checked in BigFloat). The dual value is `D = ỹ'(tθ) - n‖tθ‖²/2` for the centered response
-`ỹ`. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
-problem, so `D` bounds it from below; the computed gap is clamped as above. A shift `δ` of `β₀`
-from the profiled optimum for the fixed `β` raises `P` (by `δ²/2` when the residuals have mean
-zero) and with it the absolute duality gap; a shift toward that optimum lowers them (the relative
-gap need not change in the same direction). A column that is not all zeros after centering whose
-scale is not a normal Float64 (it rounds to zero, is subnormal or is not finite) makes the case
-`uncertifiable`, and so does a `P`, `D` or rounding scale that is not zero and not a normal
-Float64. The target is the relative gap
+centered the same way). The primal and dual core, from the stored inputs (converted exactly to
+BigFloat) to the verdict, is arithmetic in 256-bit BigFloat, independent of the package, in which
+each computed quantity carries a hand-derived absolute error bound (the error model is written in a
+comment above `lasso_standardized_parts` in `certificates.jl`). With unit roundoff `u = 2⁻²⁵⁶` and
+`G(k) = 8ku`, a sum of `k` terms or a dot product of `k` pairs has error at most `G(k)Σ|tᵢ|`, with
+the magnitudes `Σ|aᵢ||bᵢ|` and not the computed sum carrying the cancellation; operand errors
+propagate by `|âᵀb̂ - aᵀb| ≤ Σ(|âᵢ| ebᵢ + |b̂ᵢ| eaᵢ + eaᵢ ebᵢ)`. The bounds cover the means, centered
+columns and scales (`esⱼ = εxⱼ + G(n+2)ŝⱼ`), the fitted values and residuals, the primal value
+`P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ|` on the raw inputs at the stored intercept `β₀` and coefficients `β` (not
+`coef(out)`, which has `p + 1` entries), the correlations, the dual point and the dual value. The dual
+point is `tθ` with `θ = (r - r̄)/n`, and `t` the largest value up to 1, times `1 - 2⁻¹⁰⁰` when below 1,
+with `t(|ĝⱼ| + egⱼ) ≤ λ(ŝⱼ - esⱼ)` for the columns with `sⱼ > 0`; that inequality is checked, and it gives
+`|x̃ⱼ'(tθ)| ≤ λ sⱼ` in exact arithmetic (a constant column has `x̃ⱼ = 0`). The exact dual value is
+`D = ỹ'(tθ) - n‖tθ‖²/2`, which is at most the objective at every `(β₀, β)`, and in particular at the
+profiled minimum. Let `P_hi = P̂ + eP`, `P_lo = P̂ - eP` and `D_lo = D̂ - eD`. The relative gap of the
+harness is `max(P - D, 0)/max(P, floatmin)`; with `den_lo = max(P_lo, floatmin)` and
+`num_hi = max(P_hi - D_lo, 0)`, the value `num_hi/den_lo`, rounded up to a Float64, is at least the true
+relative gap. The certificate returns it with `ok` and does not pass through the shared
+`relative_gap`, whose rounding allowance and Float64 clamp would break this argument. It is
+`uncertifiable` when `(eP + eD)/den_lo > 1e-8` (1% of the smallest target, `1e-6`), when
+`P_hi < D_lo`, when the dual point cannot be shown feasible, or when a scale is not a normal Float64,
+is `0` for a column that is not constant, or is not above its error bound. A reported value therefore
+never underestimates the true relative gap, so an `ok` is not false, and a miss can be spurious only
+by a small amount in the value: it exceeds the true gap by at most `2(1 + gap)·1e-8` (from
+`num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`). The steps outside the BigFloat core are the exact input conversion, the
+validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the rounded-up
+verdict. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
+problem, so `D` bounds it from below. A shift `δ` of `β₀` from the profiled optimum for the fixed `β`
+raises `P` (by `δ²/2` when the residuals have mean zero) and with it the absolute duality gap; a
+shift toward that optimum lowers them (the relative gap need not change in the same direction). The
+target is the relative gap
 `1e-6`, as for the other cases. `check_certificates.jl` builds a problem whose solution
 `(β₀, β)` is known by construction and shows that a perturbed `β₀` misses the target; it also
-checks a column whose squares underflow, the exact constant rule and the uncertifiable scales.
+checks a column whose squares underflow, a dual scaling near `1e-250`, a cancellation in `Xβ`
+(`repeat([1e120 1 -1e120], 2, 1)`, which is `uncertifiable`), the exact constant rule, the uncertifiable
+scales, and that the value is an upper bound of the exact relative gap of small problems computed in
+rational arithmetic.
 
 A coordinate-change test of the solver, such as `fit.result.converged`, is not
 an optimality certificate for this problem and decides no status.

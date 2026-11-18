@@ -194,6 +194,39 @@ end
   c = lasso_gap_standardized(Xs, ys, 0.0, [-1e-100], 1e-100)
   @test ok(c)
   @test lasso_gap_standardized(Xs, ys, 0.0, [0.0], 1e-100).value <= TIGHT
+  # cancellation in the primal: each column is constant, so every scale is 0, and the exact
+  # prediction is 1e120 + 1 - 1e120 = 1 (residuals -1, primal value 0.5, and the optimum is 0 with
+  # β = 0). The 256-bit evaluation of Xβ loses the 1, but the error bound G(p) Σ|Xᵢⱼ||βⱼ| ≈ 4e44
+  # is carried: the certificate must not be ok
+  Xk, yk = repeat([1e120 1.0 -1e120], 2, 1), zeros(2)
+  @test lasso_standardized_parts(Xk, yk, 0.0, ones(3), 0.1) isa String
+  c = lasso_gap_standardized(Xk, yk, 0.0, ones(3), 0.1)
+  @test bad(c) && occursin("error bound", c.note)
+  # the value is an upper bound of the true relative gap, and tight when the bounds are small. For
+  # X = (-1, 1)', y = (0.5, 2.5), β₀ = 1.5 (the exact mean offset) and the stored λ the problem is
+  # ‖y - β₀ - Xβ‖²/4 + λ|β| = (1 - β)²/2 + λ|β| for β ≥ 0, whose minimum is λ - λ²/2 at β = 1 - λ.
+  # The true relative gap of a point β is computed here in rational arithmetic
+  Xa, ya = reshape([-1.0, 1.0], 2, 1), [0.5, 2.5]
+  λq = Rational{BigInt}(0.1)
+  Pq(β) = (1 - β)^2 / 2 + λq * β
+  Pmin = λq - λq^2 / 2
+  # (tight where the dual point built from the residual of β is good: not above the optimum, where it is not)
+  for (β, tight) in ((0.9, true), (0.8, true), (0.5, true), (1.2, false))
+    βq = Rational{BigInt}(β)
+    exact = (Pq(βq) - Pmin) / Pq(βq)
+    c = lasso_gap_standardized(Xa, ya, 1.5, [β], 0.1)
+    @test ok(c)
+    @test exact <= BigFloat(c.value)                       # an upper bound
+    tight && @test BigFloat(c.value) <= exact + 1e-12      # and nearly tight
+  end
+  a = lasso_standardized_parts(Xa, ya, 1.5, [0.8], 0.1)
+  Pexact = Pq(Rational{BigInt}(0.8))
+  @test abs(BigFloat(a.P) - Pexact) <= a.eP + 8 * eps(Float64(Pexact)) && a.eP < 1e-60 && a.width < 1e-60
+  # a mean that is lost by cancellation in the column: the error bound of the mean enters the scale
+  # and the correlations, and the certificate is valid or refuses; here it is valid
+  Xm = reshape([1e120, 1.0, -1e120], 3, 1)
+  c = lasso_gap_standardized(Xm, [1.0, 2.0, 3.0], 0.0, [0.0], 0.1)
+  @test ok(c) || bad(c)
   # the exact constant rule: a constant column has scale 0, also when the mean of its copies is not exact in floating point
   @test centered_scaled(fill(0.1, 10, 1))[2] == [0.0]
   @test centered_scaled(fill(1 / 3, 7, 2))[1] == zeros(7, 2)
