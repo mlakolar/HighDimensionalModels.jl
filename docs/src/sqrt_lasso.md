@@ -145,8 +145,9 @@ being rounded is in the normal range of `T`:
 A result below `floatmin(T)` is rounded to a subnormal number or to zero, with an absolute error of up to
 `nextfloat(zero(T))/2`, which is a relative error of up to 1, and the sizes above do not apply (an example
 follows the checker below). With both keywords `false` the stored problem is the problem that was given, and the
-first three terms do not arise. The tests of this package compare the duality gap below with `1e-4` plus a
-perturbation term derived from these sizes, for fits whose quantities are in the normal range.
+first three terms do not arise. For `Float64` fits on inputs of moderate magnitude (a range stated in the tests),
+the tests of this package compare the duality gap below with `1e-4` plus a perturbation term derived from these
+sizes; for `Float32` fits they do not make that comparison, and check the transformed problem and weak duality only.
 
 Nothing in `sqrt_lasso` bounds the accuracy of `β` and `β₀` in the original coordinates, and the
 package states no accuracy claim of its own. To measure it, compute a duality gap in the original
@@ -272,7 +273,7 @@ run whose first certificate attempt fails ends without a certificate instead of 
 threshold. The rounding of `Float32` coefficients can also keep the largest change of each full pass
 above the threshold, and the run then ends at `maxpasses`. In both cases `converged` is `false`. The
 tests of this package set `tol = 1e-6` and `maxpasses = 2000` for `Float32` data, and accept a certified
-result, checked independently, or a run that reports itself not converged. Read `fit.result.converged`:
+result, checked independently for the transformed problem, or a run that reports itself not converged. Read `fit.result.converged`:
 a `Float32` fit that is not converged is not certified, and a converged one is certified for the
 transformed problem, not for the original coordinates.
 

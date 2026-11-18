@@ -32,9 +32,13 @@ module SqrtLassoTest
 # normal numbers of T, so that a rounding error is relative, at most u = eps(T)/2, and that the level λps = √n λ in
 # Float64 has a relative conversion error at most η_Λ below. A result below floatmin is rounded with an absolute
 # error up to nextfloat(zero)/2, a relative error up to 1, and the bounds below do not hold. The tests assert (b)
-# only on fixtures inside `claim_b_domain` below, a sufficient condition on the inputs (with a check on the
-# solution) under which these premises are argued to hold; outside it (a fixture with β̂ⱼ = 0 for θⱼ ≠ 0, a
-# scaled entry that underflows, a level converted from a subnormal λ, scales 2^±400) (b) is not asserted.
+# only for Float64 fixtures inside `claim_b_domain` below, a sufficient condition on the inputs (with a check on
+# the solution) under which these premises are argued to hold, with explicit lower bounds that `margin_bounds`
+# checks on those fixtures. Outside it (a fixture with β̂ⱼ = 0 for θⱼ ≠ 0, a scaled entry that underflows, a level
+# converted from a subnormal λ, scales 2^±400) (b) is not asserted. It is not asserted for Float32 at all: within
+# the same input ranges cancellation can give a subnormal residual or intercept (the testset "why claim (b) is
+# not asserted for Float32"), and the Float32 range (floatmin 2⁻¹²⁶) leaves too little headroom for a simple
+# argument. Claim (a), weak duality and the other assertions are made for Float32 as for Float64.
 # The solver sees Ẑ and ỹ̂, the rounded centred and scaled data in T, and returns θ; the stored β̂ⱼ = fl(θⱼ/ŝⱼ)
 # and β̂₀ = fl(ȳ̂ - x̄̂ᵀβ̂) are formed from them. Let Zⱼ, ỹ be the exact centred and scaled data, φ = Sβ̂ (exact weights s),
 # δ₀ = ȳ - x̄ᵀβ̂ - β̂₀, r̂ = ỹ̂ - Ẑθ and E = Ẑ - Z. Then
@@ -175,26 +179,62 @@ end
 transformed(X, y, ic, st) = ic || st ? HDM.preprocess(X, y, ic, st) : (; Z = X, ỹ = y)
 level(λ, n) = sqrt(Float64(n)) * Float64(λ)
 
-# A SUFFICIENT condition for the premises of the derivation of ω (see the header), not a checker of them: inputs
-# with n, p ≤ 1000, nonzero entries of X and y of magnitude in [2⁻⁴⁰, 2⁴⁰], and λ in [2⁻²⁰, 2²⁰]; and, after the
-# fit, every nonzero θⱼ and β̂ⱼ a normal number of T, with θⱼ ≠ 0 exactly where β̂ⱼ ≠ 0 (no underflow in the back-map;
-# the solution can be small, so this part depends on the fit). Why the premises then hold (an argument, with wide
-# margins, not a proof): nonzero entries in that range are multiples of ulp(2⁻⁴⁰) (at least 2⁻⁶³ for Float32), so a
-# nonzero exact mean of at most 1000 of them, centred entry and root mean square of centred entries are each at
-# least 2⁻⁸⁰ in magnitude and at most 2⁵¹, and the nonzero entries of Z (after the division by a scale) and of ỹ
-# at least 2⁻¹²⁰ and at most 2⁵¹, above floatmin(T) (2⁻¹²⁶ for Float32, with much more room for Float64) and far
-# below floatmax; the sums and products that the preprocessing and the back-map round are of such numbers, so their rounding
-# errors are relative to the terms, and an absolute underflow error of at most nextfloat(zero(T))/2 per term (a
-# product of an entry and a small coefficient) is below G times the smallest quantity in the bounds; λps lies in
-# [2⁻²⁰, 2²⁵] and λ is a Float32 or Float64 number (or converts to a normal Float64), so the conversion error is
-# at most η_Λ.
+# A SUFFICIENT condition for the premises of the derivation of ω (see the header), not a checker of them, for
+# Float64 only (false for any other type). Inputs: n, p ≤ 1000; nonzero entries of X and y of magnitude in
+# [2⁻⁴⁰, 2⁴⁰]; λ in [2⁻²⁰, 2²⁰]. Post-check on the fit: θⱼ ≠ 0 exactly where β̂ⱼ ≠ 0, and every nonzero θⱼ and β̂ⱼ of
+# magnitude in [2⁻²⁰⁰, 2²⁰⁰] (the solution can be small or large, so this part depends on the fit).
+#
+# The argument is a crude margin argument: every nonzero rounded quantity of the derivation is bounded below by a
+# power of two far above floatmin(Float64) = 2⁻¹⁰²² (the lowest bound below is 2⁻⁴⁸⁶, more than 500 binades
+# above), and above by 2²⁵⁰ (far below floatmax = 2¹⁰²⁴), so that each rounding error is relative. The bounds,
+# each derived from the input domain, with cancellation included:
+# - Grid. A nonzero entry of X or y is a multiple of 2⁻⁹² (a Float64 in [2^e, 2^(e+1)) is a multiple of 2^(e-52),
+#   e ≥ -40). A sum of floats that are multiples of 2^-g is a multiple of 2^-g, whether or not it is rounded, in
+#   any order or with fused operations (a result below 2^53 times the grid is exact; a larger one rounds to a
+#   multiple of a larger power of two). So a nonzero sum is at least the grid.
+# - Means. The terms x/m, with m the power of two at most max|x| (so 2⁻⁴⁰ ≤ m ≤ 2⁴⁰), are exact multiples of
+#   2⁻⁹²/m, so of 2⁻¹³²: a nonzero sum of at most 1000 of them is at least 2⁻¹³², the division by n ≤ 1000 gives at
+#   least 2⁻¹⁴², and the product with m at least 2⁻¹⁸². So the computed mean of a column, or of y, is 0 or at
+#   least 2⁻¹⁸² (the exact mean is 0 or at least 2⁻⁹²/1000 > 2⁻¹⁰²). A column whose entries are all equal has its
+#   entry as its mean.
+# - Centred entries (x - x̄ and y - ȳ). If x = 0, the result is -x̄, 0 or at least 2⁻¹⁸². If x ≠ 0 and |x̄| ≤ |x|/2,
+#   at least |x|/2 ≥ 2⁻⁴¹. Otherwise |x̄| > 2⁻⁴¹, so x̄ is a multiple of 2⁻⁹³ (its ulp), as is x, and a nonzero
+#   difference is at least 2⁻⁹³. So a centred entry is 0 or at least 2⁻¹⁸² and at most 2⁴¹.
+# - Scales. For v the centred (or raw) column, with m' the power of two at most max|v| (at least 2⁻¹⁸³), the squares
+#   (v/m')² are at least (2⁻¹⁸²/2⁴²)² = 2⁻⁴⁴⁸ when nonzero (normal, no underflow) and their sum is at least 1 (the
+#   largest term is at least 1) and less than 4n; so s = m'·√(sum/n) is at least 2⁻¹⁸³·2⁻⁵ = 2⁻¹⁸⁸, and at most 2⁴².
+# - Entries of Z = v/s: at least 2⁻¹⁸²/2⁴² = 2⁻²²⁴ when nonzero, at most 2⁷; entries of ỹ = y - ȳ: 0 or at least 2⁻¹⁸².
+# - Level. λps = √n λ lies in [2⁻²⁰, 2²⁵], normal, and Float64(λ) is a normal number (conversion error at most u).
+# - Coefficients: nonzero θⱼ, β̂ⱼ are in [2⁻²⁰⁰, 2²⁰⁰] by the post-check.
+# - Intercept β̂₀ = ȳ - Σⱼ x̄ⱼβ̂ⱼ. Each product is 0 or at least 2⁻¹⁸²·2⁻²⁰⁰ = 2⁻³⁸², so a multiple of 2⁻⁴³⁴ (its
+#   ulp); the partial sums are multiples of 2⁻⁴³⁴; ȳ is 0 or a multiple of 2⁻²³⁴: so β̂₀ is 0 or at least 2⁻⁴³⁴.
+# - Residuals y - β̂₀ - Xβ̂. Each exact product x β̂ is a multiple of 2⁻⁹²·2⁻²⁵² = 2⁻³⁴⁴, so the fitted values are
+#   multiples of 2⁻³⁴⁴. y - β̂₀ is 0 or, by the argument of the centred entries, at least min(2⁻⁹³, |β̂₀|) ≥ 2⁻⁴³⁴ (a
+#   float, so a multiple of 2⁻⁴⁸⁶), and the final difference of that and a multiple of 2⁻³⁴⁴ is 0 or at least 2⁻⁴⁸⁶.
+# The upper bounds: entries at most 2⁴⁰, means at most 2⁴⁰, centred entries 2⁴¹, scales 2⁴², Z at most 2⁷, a
+# product x β̂ at most 2²⁴⁰ and a sum of at most 1000 of them 2²⁵⁰. `margin_bounds` below checks these lower and
+# upper bounds on the computed quantities of the fixtures on which (b) is asserted. This is an argument, with
+# margins of hundreds of binades, not a proof.
 function claim_b_domain(X::Matrix{T}, y, fit, λ) where T
+  T === Float64 || return false
   n, p = size(X)
   inrange(v) = iszero(v) || 2.0^-40 <= abs(v) <= 2.0^40
-  normal(v) = abs(v) >= floatmin(T)
   θ = fit.result.minimizer
+  post(v) = 2.0^-200 <= abs(v) <= 2.0^200
   n <= 1000 && p <= 1000 && all(inrange, X) && all(inrange, y) && 2.0^-20 <= λ <= 2.0^20 &&
-    all(j -> (iszero(θ[j]) && iszero(fit.coefficients[j])) || (normal(θ[j]) && normal(fit.coefficients[j])), 1:p)
+    all(j -> (iszero(θ[j]) && iszero(fit.coefficients[j])) || (post(θ[j]) && post(fit.coefficients[j])), 1:p)
+end
+
+# The bounds of the argument above, checked on the computed quantities of a Float64 fit (zero or within the stated
+# magnitudes): the means, the centred entries, the scales, the entries of Z and ỹ, the intercept and the residuals.
+function margin_bounds(X::Matrix{Float64}, y, fit, ic, st)
+  d = HDM.preprocess(X, y, ic, st)                 # x̄ and ȳ are zeros without an intercept
+  within(v, lo, hi) = iszero(v) || (lo <= abs(v) <= hi)
+  centred = X .- transpose(d.x̄)
+  all(v -> within(v, 2.0^-182, 2.0^41), centred) && all(v -> within(v, 2.0^-182, 2.0^41), d.ỹ) &&
+    all(v -> within(v, 2.0^-182, 2.0^40), d.x̄) && within(d.ȳ, 2.0^-182, 2.0^40) &&
+    all(v -> within(v, 2.0^-224, 2.0^7), d.Z) && (d.s === nothing || all(v -> within(v, 2.0^-188, 2.0^42), d.s)) &&
+    within(fit.intercept, 2.0^-434, 2.0^250) && all(v -> within(v, 2.0^-486, 2.0^250), fit.residuals)
 end
 
 # The normalized KKT violation of the stored transformed problem, relative to the level Λps. With
@@ -221,7 +261,7 @@ end
 # claims (a) and (b) for a fit of `sqrt_lasso(X, y, λ, ...; intercept = ic, standardize_x = st)`, when it
 # reports `converged`; the observed ratio of the two gaps' difference to ω is recorded in `margins`
 const margins = Float64[]
-function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, tight = true, claim_b = true) where T
+function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, tight = true, claim_b = (T === Float64)) where T
   n = size(X, 1)
   @test fit.result.converged
   d = transformed(X, y, ic, st)
@@ -245,6 +285,7 @@ function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, ti
   @test b.weak
   if claim_b
     @test claim_b_domain(X, y, fit, λ)
+    @test margin_bounds(X, y, fit, ic, st)
     @test b.gap <= 1e-4 + b.ω
     isfinite(b.ω) && b.ω > 0 && push!(margins, max(b.gap - a.gap, 0) / b.ω)
   else
@@ -644,6 +685,49 @@ end
     @test Float64(λ) < floatmin(Float64) && lvl >= floatmin(Float64)
     @test abs(BigFloat(lvl) - exact) / exact > 4 * BigFloat(2)^-53
     @test !claim_b_domain(Xl, yl, f, λ) && iszero(f.coefficients)
+  end
+
+  @testset "why claim (b) is not asserted for Float32: cancellation within the input ranges" begin
+    # Float32 fixtures of a review: inputs in [2⁻⁴⁰, 2⁴⁰] and λ = 2²⁰, with a certified fit of normal coefficient
+    # 4.9303807f-32 (standardize_x = false, cyclic order), whose stored residual or intercept is a subnormal
+    # number with a large relative error (the premise of ω is a relative error at most eps(Float32)/2). The
+    # coefficient is fixed here, so that the facts do not depend on the solver. claim_b_domain is false for Float32.
+    λ = 2.0^20
+    β = Float32[4.9303807f-32]
+    X = reshape(Float32[2^40, 0, Float32(1.01) * Float32(2)^-40], 3, 1)
+    y = Float32[2^-40, Float32(1 / (sqrt(3) * λ)), 0]
+    r = X * β
+    r .= y .- zero(Float32) .- r                       # as sqrt_lasso forms the residuals
+    exact = BigFloat(y[3]) - BigFloat(X[3]) * BigFloat(β[1])
+    @test 0 < abs(r[3]) < floatmin(Float32) && abs(BigFloat(r[3]) - exact) / abs(exact) > 1e-3
+    X2 = reshape(Float32[2^40, -2^40, Float32(1.01) * Float32(2)^-40, 0], 4, 1)
+    B = Float32(1 / (sqrt(2) * λ))
+    y2 = Float32[2^-40, -2^-40, B, -B]
+    d = HDM.preprocess(X2, y2, true, false)
+    β₀ = HDM.intercept_from_means(d.ȳ, d.x̄, β)
+    @test 0 < abs(β₀) < floatmin(Float32)
+    stored = (; coefficients = β, result = (; minimizer = β))
+    @test !claim_b_domain(X, y, stored, λ) && !claim_b_domain(X2, y2, stored, λ)
+  end
+
+  @testset "Float64 fixtures that broke the first stated bounds satisfy the corrected ones" begin
+    # a column mean below 2⁻⁸⁰ and a scaled entry below 2⁻¹²⁰, with inputs inside the domain: the corrected
+    # bounds (2⁻¹⁸² for means, 2⁻²²⁴ for entries of Z) hold. These are near-exact fits (the response is in the span of
+    # the design up to rounding), where the dual direction of the residual is rounding noise and the independent gap
+    # is not informative, so only the domain and the bounds are asserted
+    a = 2.0^-40
+    X = reshape([nextfloat(a), -a, 0.0], 3, 1)
+    y = [1.0, -1.0, 0.0]
+    f = quiet(() -> sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true))
+    μ = sum(BigFloat.(X)) / 3
+    @test 2.0^-102 < μ < 2.0^-80
+    @test claim_b_domain(X, y, f, 0.1) && margin_bounds(X, y, f, true, true)
+    X = reshape([2.0^40, -2.0^40, nextfloat(a), -a, 0.0], 5, 1)
+    y = [1.0, -1.0, 1.0, -1.0, 0.0]
+    f = quiet(() -> sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true))
+    z = HDM.preprocess(X, y, true, true).Z[5]
+    @test 2.0^-224 < abs(z) < 2.0^-120
+    @test claim_b_domain(X, y, f, 0.1) && margin_bounds(X, y, f, true, true)
   end
 
   @testset "the independent gap is Inf, not negative, where the dual value is not positive" begin
