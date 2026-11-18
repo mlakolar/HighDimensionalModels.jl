@@ -236,7 +236,86 @@ end
     @test !v(with("test-cross" => "success"); level = "none", tests = "none", jobs = "test-cross")[1]
     @test !v(with("test-cross" => "success"); level = "full", tests = "all", jobs = "test-cross")[1]
     passed, lines = v(full; level = "none", tests = "none", jobs = "benchmark-integrity test")
-    @test any(l -> occursin("a `none` plan has tests or the `test` job", l), lines)
+    @test any(l -> occursin("a `none` plan requires the `test` or `test-cross` job", l), lines)
+    # The reviewed counterexamples and their neighbours: only the combinations the planner emits pass.
+    pp(level, tests, jobs) = CIPlan.plan_problems(level, tests, jobs, TS.alltests(INVENTORY))[2]
+    @test isempty(pp("full", "all", "benchmark-integrity test"))
+    @test isempty(pp("full", "all", "benchmark-integrity test test-cross"))
+    @test isempty(pp("focused", "lasso,smoke", "test"))
+    @test isempty(pp("focused", "all", "test"))
+    @test isempty(pp("focused", "smoke", "benchmark-integrity test"))
+    @test isempty(pp("none", "none", "none"))
+    @test isempty(pp("none", "none", "benchmark-integrity"))
+    for (what, level, tests, jobs) in (
+        ("full, a name list instead of all", "full", "smoke", "benchmark-integrity test"),
+        ("full, a name list of every file", "full", join(TS.alltests(INVENTORY), ","), "benchmark-integrity test"),
+        ("full without benchmark-integrity", "full", "all", "test"),
+        ("full without the test job", "full", "all", "benchmark-integrity"),
+        ("full with none", "full", "none", "benchmark-integrity test"),
+        ("none with tests", "none", "smoke", "none"),
+        ("none with all", "none", "all", "none"),
+        ("none with the test job", "none", "none", "test"),
+        ("none with test-cross", "none", "none", "test-cross"),
+        ("focused with none", "focused", "none", "test"),
+        ("focused without the test job", "focused", "smoke", "benchmark-integrity"),
+        ("an unknown test name", "focused", "nosuchtest", "test"),
+        ("a duplicate name", "focused", "smoke,smoke", "test"),
+        ("a trailing comma", "focused", "smoke,", "test"),
+        ("a leading comma", "focused", ",smoke", "test"),
+        ("an empty item", "focused", "smoke,,lasso", "test"),
+        ("a space in the list", "focused", "smoke, lasso", "test"),
+        ("a whitespace-only selection", "full", "   ", "benchmark-integrity test"),
+        ("a whitespace-only selection, focused", "focused", " ", "test"),
+        ("all with a name", "focused", "all,smoke", "test"),
+        ("none with a name", "focused", "none,smoke", "test"),
+        ("test-cross without test", "focused", "smoke", "test-cross"),
+        ("a job twice", "full", "all", "benchmark-integrity test test"),
+        ("a double space between jobs", "full", "all", "benchmark-integrity  test"),
+        ("a leading space in the jobs", "full", "all", " benchmark-integrity test"),
+        ("none among jobs", "full", "all", "benchmark-integrity none test"),
+        ("an unknown job", "full", "all", "benchmark-integrity deploy test"),
+        ("an unknown level", "partial", "all", "test"),
+        ("an empty level", "", "all", "test"))
+      @test !isempty(pp(level, tests, jobs))
+      @test !v(merge(allskipped, Dict("test" => "success", "benchmark-integrity" => "success")); level, tests, jobs)[1]
+    end
+    # An inventory with a test named like a keyword cannot be told apart from the keyword.
+    @test !isempty(CIPlan.plan_problems("focused", "smoke", "test", ["smoke", "all"])[2])
+    # Property: every plan the planner produces for these changes and events, through `write_outputs`, is valid. Changes and events
+    # span documentation, the benchmark, source, tests, scripts, the workflow, unknown paths,
+    # the nightly and manual runs, and a map with focused rules.
+    narrow_rules = [Rule(["src/lasso.jl"], "focused", ["lasso"], String[], String[], "r"),
+                    Rule(["src/other.jl"], "focused", String[], ["aqua"], ["benchmark-integrity"], "r"),
+                    Rule(["src/cross.jl"], "focused", String[], ["smoke"], ["test-cross"], "r"),
+                    Rule(["src/everything.jl"], "focused", String[], collect(ALL), String[], "r"),
+                    Rule(["docs/**"], "none", String[], String[], String[], "r"),
+                    Rule(["bench/**"], "none", String[], String[], ["benchmark-integrity"], "r"),
+                    Rule(["test/**"], "full", String[], String[], String[], "r")]
+    narrow = Impact(["smoke"], ["aqua"], Dict("lasso" => ["lasso", "statsapi"]), narrow_rules)
+    changes = [Change[], [M("README.md")], [M("benchmark/cases.jl")], [M("benchmark/cases.jl"), M("README.md")],
+               [M("src/lasso.jl")], [M("test/lasso.jl")], [M("test/testsuite.toml")], [M("scripts/test.jl")],
+               [M(".github/workflows/CI.yml")], [M("Project.toml")], [M("somewhere/unknown.txt")],
+               [Change('D', "src/lasso.jl")], [Change('R', "src/a.jl", "docs/a.md")]]
+    narrow_changes = [[M("src/lasso.jl")], [M("src/other.jl")], [M("src/cross.jl")], [M("src/everything.jl")],
+                      [M("docs/a.md")], [M("bench/x.jl")], [M("src/lasso.jl"), M("docs/a.md")],
+                      [M("src/lasso.jl"), M("src/other.jl")], [M("elsewhere.txt")], [M("test/x.jl")]]
+    plans = vcat([plan(c, IMPACT, INVENTORY) for c in changes], [plan(c, narrow, INVENTORY) for c in narrow_changes],
+                 [full_plan("nightly"), full_plan("manual"), full_plan("push"; cross = false)])
+    @test length(unique(pl.level for pl in plans)) == 3          # none, focused and full all occur
+    @test any(pl -> pl.tests === nothing && pl.level == "focused", plans)
+    mktempdir() do dir
+      out = joinpath(dir, "out")
+      for pl in plans
+        write(out, ""); write_outputs(out, pl)
+        o = Dict(String(first(split(l, '='))) => String(last(split(l, '='; limit = 2))) for l in readlines(out))
+        required, problems = CIPlan.plan_problems(o["level"], o["tests"], o["jobs"], TS.alltests(INVENTORY))
+        @test isempty(problems)
+        @test required == (o["jobs"] == "none" ? String[] : String.(split(o["jobs"])))
+        # The gate accepts the plan when its required jobs succeeded and the others were skipped.
+        res = Dict(j => (j in required ? "success" : "skipped") for j in jobs)
+        @test v(res; level = o["level"], tests = o["tests"], jobs = o["jobs"])[1]
+      end
+    end
     # Results: duplicates, malformed words, unknown results.
     res, problems = CIPlan.parse_results("test=success test-cross=skipped benchmark-integrity=skipped")
     @test isempty(problems) && res == Dict("test" => "success", "test-cross" => "skipped", "benchmark-integrity" => "skipped")

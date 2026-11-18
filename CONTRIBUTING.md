@@ -29,8 +29,11 @@ scripts below.
   is cloned at its commit (detached). An existing one is moved to the requested
   commit only if it has no tracked or untracked changes; otherwise the script
   stops. The scripts look for checkouts only there, not next to this repository.
-- `scripts/test.jl` and `scripts/instantiate.jl ENV_DIR` check that the manifest
-  tracks the two checkouts and this package by path (so the check fails if
+- `scripts/test.jl` and `scripts/instantiate.jl ENV_DIR` refuse an environment that
+  has a `JuliaProject.toml`, a top-level `manifest` key in its `Project.toml`, or a
+  `[workspace]` table in a `Project.toml` above it (Julia would then use another
+  project or manifest than the ones the scripts edit and check). They check that the
+  manifest, which is the one Julia selects for the environment, tracks the two checkouts and this package by path (so the check fails if
   ProximalSolvers' own `[sources]` pin of ProximalBase substitutes another commit),
   and that a Julia process using the environment loads those checkouts at the
   requested commits with clean trees. An environment that cannot be built from the
@@ -88,18 +91,21 @@ also resolves the two dependency commits once; every job of the run uses that pa
   documentation alone runs no package test and no benchmark job (the plan, the gate
   and the separate documentation workflow still run); a change to `benchmark/` alone
   runs only the benchmark integrity checks. `gate` is the one required check: it
-  passes only if the plan's outputs are complete and consistent, every job the plan
-  required succeeded and every other job was skipped.
+  passes only if the plan's level, test selection and jobs are one of the
+  combinations the planner emits (`CIPlan.plan_problems` lists them), every job the
+  plan required succeeded and every other job was skipped.
 - Every night, and for a manual run, the same jobs run with macOS (arm64) and
   Windows added. A manual run can pin the commits with its inputs:
   `gh workflow run CI.yml --ref <branch>` (add
   `-f proximalbase_rev=<sha> -f proximalsolvers_rev=<sha>`).
 - A failing run on master (push, nightly or manual) opens an issue titled "CI
-  failing on master", or comments on the open one, found by its exact title among
-  the open issues. The reports go through one concurrency group, one at a time.
-  GitHub keeps at most one pending job per group, so with several simultaneous
-  failures a report can be dropped, which loses a comment but does not create a
-  second issue.
+  failing on master", or comments on the lowest-numbered open issue with exactly
+  that title (the lookup reads every open issue, page by page, and stops without
+  creating anything if the listing fails). Within this workflow the reports go
+  through one concurrency group, one at a time, and GitHub keeps at most one pending
+  job per group, so with several simultaneous failures a report can be dropped, which
+  loses a comment. An issue with that title that someone closes, or creates by hand,
+  is outside what the job controls.
 
 `julia scripts/test_affected.jl` prints the plan for your local changes and runs
 the test files it selects; `--dry-run` prints the plan only.

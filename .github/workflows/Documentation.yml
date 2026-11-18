@@ -42,5 +42,5 @@ jobs:
           name: dependencies-documentation
           path: |
             docs/receipt.toml
-            docs/Manifest*.toml
+            docs/*Manifest*.toml
           if-no-files-found: warn

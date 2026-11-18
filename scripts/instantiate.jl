@@ -9,8 +9,11 @@
 #
 # Revisions and the checkouts directory are chosen as for scripts/test.jl: HDM_PROXIMALBASE_REV,
 # HDM_PROXIMALSOLVERS_REV and HDM_DEPS_DIR. The Project.toml of ENV_DIR is restored after the
-# setup. The manifest is checked to track the checkouts by path, and a Julia process that uses
-# ENV_DIR must load them at the requested commits with clean trees.
+# setup. ENV_DIR is refused, before anything is changed, if Julia would use another project or
+# manifest than the ones checked here (`Dependencies.check_project`): a JuliaProject.toml, a
+# `manifest` key in its Project.toml, or a `[workspace]` table in a project file above it. The
+# manifest is checked to track the checkouts by path, and a Julia process that uses ENV_DIR must
+# load them at the requested commits with clean trees.
 include(joinpath(@__DIR__, "dependencies.jl"))
 using .Dependencies
 

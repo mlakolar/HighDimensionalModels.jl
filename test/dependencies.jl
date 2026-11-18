@@ -132,12 +132,57 @@ message(f) = try f(); nothing catch err sprint(showerror, err) end
         # The file the helper reads is the one Pkg and the test process use.
         @test basename(D.manifest_file(dir)) == julia_chooses()
       end
+      # Accepted environment: the helper's file is the one Julia selects (compared above), and
+      # verify_manifest checks that too.
+      foreach(n -> rm(joinpath(dir, n); force = true), D.manifest_names())
+      write(joinpath(dir, "Manifest.toml"), "")
+      @test D.check_project(dir) == dir
+      @test realpath(D.manifest_file(dir)) == realpath(Base.project_file_manifest_path(project))
       # A fresh test project removes the manifests of the running Julia version, and a JuliaProject.toml.
       write(joinpath(dir, "JuliaProject.toml"), "")
       D.write_test_project(dir)
       @test !any(n -> isfile(joinpath(dir, n)), D.manifest_names())
       @test !isfile(joinpath(dir, "JuliaProject.toml")) && isfile(project)
       @test occursin("no manifest", message(() -> D.manifest_file(dir)))
+    end
+  end
+
+  @testset "environments the helper cannot verify are refused" begin
+    mktempdir() do dir
+      write(joinpath(dir, "Project.toml"), "")
+      @test D.check_project(dir) == dir
+      # What Julia accepts but the helper does not read: another project file, another manifest,
+      # a workspace above (whose members share its manifest).
+      write(joinpath(dir, "JuliaProject.toml"), "")
+      @test occursin("has a JuliaProject.toml", message(() -> D.check_project(dir)))
+      rm(joinpath(dir, "JuliaProject.toml"))
+      write(joinpath(dir, "Project.toml"), "manifest = \"custom.toml\"\n")
+      @test occursin("has a `manifest` key", message(() -> D.check_project(dir)))
+      write(joinpath(dir, "Project.toml"), "")
+      member = joinpath(dir, "env")
+      mkpath(member)
+      write(joinpath(member, "Project.toml"), "")
+      write(joinpath(dir, "Project.toml"), "[workspace]\nprojects = [\"env\"]\n")
+      @test occursin("[workspace] table above", message(() -> D.check_project(member)))
+      rm(joinpath(dir, "Project.toml")); write(joinpath(dir, "JuliaProject.toml"), "[workspace]\n")
+      @test occursin("[workspace] table above", message(() -> D.check_project(member)))
+      rm(joinpath(dir, "JuliaProject.toml"))
+      @test D.check_project(member) == member
+      # Its own [workspace] and [sources] are accepted (the manifest checks cover what they could
+      # change), and a directory without Project.toml is not an environment.
+      write(joinpath(member, "Project.toml"), "[workspace]\nprojects = []\n[sources]\nA = {path = \"x\"}\n")
+      @test D.check_project(member) == member
+      rm(joinpath(member, "Project.toml"))
+      @test occursin("has no Project.toml", message(() -> D.check_project(member)))
+      # develop refuses before it changes anything.
+      write(joinpath(member, "Project.toml"), "manifest = \"custom.toml\"\n")
+      @test occursin("has a `manifest` key", message(() -> D.develop(member, Dict{String,String}())))
+      @test read(joinpath(member, "Project.toml"), String) == "manifest = \"custom.toml\"\n"
+      @test !isfile(joinpath(member, "Manifest.toml"))
+      # verify_manifest: with both files present Julia reads custom.toml, so Manifest.toml is not the manifest.
+      write(joinpath(member, "Manifest.toml"), "")
+      write(joinpath(member, "custom.toml"), "")
+      @test occursin("Julia uses the manifest", message(() -> D.verify_manifest(member, Dict(n => member for n in D.PACKAGES))))
     end
   end
 
