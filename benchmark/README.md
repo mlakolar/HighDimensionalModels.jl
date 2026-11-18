@@ -125,7 +125,7 @@ exact arithmetic a nonoptimal point has a positive gap; the computed gap is
 clamped to zero when it is negative by less than a rounding bound, and a more
 negative one (a violation of weak duality) makes the case `uncertifiable`. For
 `λ = 0` the certificate is the KKT residual `‖X'r/n‖∞` of the least squares,
-relative to `max(1, ‖X'y‖∞/n)`, because the scaled dual point is then zero. `check_certificates.jl` tests it with
+relative to `max(1, ‖X'y‖∞/n)`, not a duality gap. `check_certificates.jl` tests it with
 analytic problems, problems whose solution is known by construction,
 nonoptimal points, weak duality, dual feasibility and nonfinite inputs, and
 runs the `dense` and `float32` cases and the control once against their targets.

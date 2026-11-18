@@ -18,11 +18,8 @@
 # P - D < -tol is a weak-duality violation, which makes the case
 # uncertifiable, and -tol ≤ P - D < 0 counts as a zero gap.
 #
-# With λ = 0 the dual constraint is X'θ = 0, and the scaling below gives
-# t = 0, so the dual point is zero and D = 0 unless X'r = 0: a gap would be one
-# at every point with X'r ≠ 0 and P > 0, however close that point is to the
-# minimum. So the certificate reports the KKT residual ‖X'r/n‖∞ (measure
-# :kkt_residual), relative to max(1, ‖X'y‖∞/n), instead of a gap.
+# With λ = 0 the certificate does not use a duality gap: it reports the KKT
+# residual ‖X'r/n‖∞ (measure :kkt_residual), relative to max(1, ‖X'y‖∞/n).
 
 using LinearAlgebra
 
