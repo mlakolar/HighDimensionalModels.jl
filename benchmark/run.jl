@@ -1,6 +1,6 @@
 using HighDimensionalModels
-import HiGHS, ProximalBase, ProximalSolvers
-using LinearAlgebra, SparseArrays, Random, Statistics, Printf, TOML, SHA, Profile
+import ProximalBase, ProximalSolvers
+using LinearAlgebra, Random, Statistics, TOML, SHA, Profile
 
 include("problems.jl")
 include("certificates.jl")
@@ -14,7 +14,7 @@ const METRICS_HEADER = ("id", "group", "phase", "rep", "status", "samples", "ok_
   "worst_value", "median_value", "data_hash")
 const SAMPLES_HEADER = ("id", "rep", "sample", "time_ns", "gc_ns", "bytes", "value", "status")
 const ERRORS_HEADER = ("id", "rep", "status", "exception", "stack")
-const CASE_STATUS_ORDER = (:error, :timeout, :incomplete, :uncertifiable, :target_missed)
+const CASE_STATUS_ORDER = (:error, :timeout, :uncertifiable, :target_missed)
 const MIN_SAMPLES = 3
 
 tsv_field(::Nothing) = ""
@@ -33,12 +33,8 @@ end
 
 function package_fingerprint(root)
   files = [joinpath(root, "Project.toml")]
-  for directory in ("src", "ext")
-    path = joinpath(root, directory)
-    isdir(path) || continue
-    for (folder, _, names) in walkdir(path), name in names
-      endswith(name, ".jl") && push!(files, joinpath(folder, name))
-    end
+  for (folder, _, names) in walkdir(joinpath(root, "src")), name in names
+    endswith(name, ".jl") && push!(files, joinpath(folder, name))
   end
   fingerprint(root, files)
 end
@@ -46,8 +42,12 @@ end
 # The Julia files of this folder, not those of generated environments below it
 harness_files() = [joinpath(@__DIR__, name) for name in readdir(@__DIR__) if endswith(name, ".jl")]
 
+# The commit and whether tracked files differ from it, for a checkout at its
+# repository root; "unavailable" and dirty for a directory that is not one
 function git_identity(root)
   revision = try
+    top = readchomp(pipeline(`git -C $root rev-parse --show-toplevel`; stderr = devnull))
+    realpath(top) == realpath(root) || error("not the root of its repository")
     readchomp(pipeline(`git -C $root rev-parse HEAD`; stderr = devnull))
   catch
     "unavailable"
@@ -58,6 +58,14 @@ function git_identity(root)
     true
   end
   revision, dirty
+end
+
+# The checkout that a loaded package comes from: its root, commit, dirty flag and version
+function source_identity(mod::Module)
+  root = realpath(dirname(dirname(pathof(mod))))
+  revision, dirty = git_identity(root)
+  version = pkgversion(mod)
+  (; root, revision, dirty, version = version === nothing ? "unknown" : string(version))
 end
 
 # The manifest of the active environment, by the names Pkg looks for
@@ -113,7 +121,7 @@ function runner_settings()
   list in ("true", "false") || error("HDM_LIST must be true or false")
   output = abspath(get(ENV, "HDM_OUTPUT", joinpath(@__DIR__, "results")))
   expected = get(ENV, "HDM_EXPECTED_PACKAGE_ROOT", "")
-  root = realpath(dirname(dirname(pathof(HighDimensionalModels))))
+  root = source_identity(HighDimensionalModels).root
   if !isempty(expected)
     expected = realpath(expected)
     root == expected || error("loaded HighDimensionalModels from $root; expected $expected")
@@ -124,12 +132,17 @@ end
 
 function start_metadata(settings)
   s = settings
-  revision, dirty = git_identity(s.root)
+  package = source_identity(HighDimensionalModels)
+  base, solvers = source_identity(ProximalBase), source_identity(ProximalSolvers)
   Dict{String,Any}("julia" => string(VERSION), "rep" => s.rep, "suite" => s.suite,
     "groups" => join(s.groups, ','),
     "harness_hash" => fingerprint(@__DIR__, harness_files()),
-    "package_path" => s.root, "package_sha" => revision, "package_dirty" => dirty,
-    "package_hash" => package_fingerprint(s.root),
+    "package_path" => package.root, "package_sha" => package.revision, "package_dirty" => package.dirty,
+    "package_version" => package.version, "package_hash" => package_fingerprint(s.root),
+    "proximalbase_path" => base.root, "proximalbase_sha" => base.revision,
+    "proximalbase_dirty" => base.dirty, "proximalbase_version" => base.version,
+    "proximalsolvers_path" => solvers.root, "proximalsolvers_sha" => solvers.revision,
+    "proximalsolvers_dirty" => solvers.dirty, "proximalsolvers_version" => solvers.version,
     "expected_package_root" => s.expected, "julia_threads" => Threads.nthreads(),
     "blas_threads" => BLAS.get_num_threads(), "blas" => string(BLAS.get_config()),
     "cpu" => Sys.CPU_NAME, "cpu_model" => Sys.cpu_info()[1].model,
@@ -146,7 +159,7 @@ function write_metadata(path, metadata)
 end
 
 function certificate_status(cert, meta)
-  cert.status in (:uncertifiable, :incomplete) && return cert.status
+  cert.status == :uncertifiable && return cert.status
   cert.status == :ok || error("invalid certificate status $(cert.status)")
   string(cert.measure) == meta.measure ||
     error("certificate measure $(cert.measure) differs from the catalog's $(meta.measure)")
