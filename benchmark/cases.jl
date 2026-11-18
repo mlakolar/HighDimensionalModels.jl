@@ -68,10 +68,11 @@ case64(v::AbstractVector) = Vector{Float64}(collect(v))
 case64(x::Real) = Float64(x)
 
 # Columns centered and scaled to mean square one (a constant column becomes zero)
-# and the response centered. `lasso` has no intercept and no standardization, so
-# these are the coordinates in which the earlier standardized lasso with an
-# intercept solved the same scenarios: its objective in the original coordinates
-# is this one in the new, with the same ratio λ/λmax. The sums add in a fixed
+# and the response centered. These are the coordinates in which the earlier
+# standardized lasso with an intercept solved the same scenarios, and in which
+# the cases other than `dense-standardized` call `lasso` with its defaults: the
+# objective with an intercept and scales in the original coordinates is this one
+# in the new, with the same ratio λ/λmax. The sums add in a fixed
 # order, so that they do not depend on the BLAS or Statistics of the Julia version.
 function standardized(X, y)
   Z = similar(X, Float64)
@@ -117,9 +118,25 @@ function lasso_cases!(catalog)
   lasso_call(s) = lasso(s.X, s.y, s.λ, s.solver)
   lasso_certificate(s, out) = lasso_gap(s.X, s.y, coef(out), s.λ)
 
+  # The raw inputs of the scenario, fit with an intercept and standardization at the level
+  # ratio λmax of the centered and scaled problem (the level of `dense`). The certificate
+  # reads the stored intercept and coefficients: coef(out) has p + 1 entries here.
+  function standardized_inputs(p; ratio = 0.1, tol = 1e-7)
+    Z, r = standardized(p.X, p.y)
+    λ = ratio * lambda_max(Z, r)
+    solver = CDSolver(; tol, rng = solver_rng())
+    (; X = p.X, y = p.y, λ, solver, levels = [λ])
+  end
+  standardized_call(s) = lasso(s.X, s.y, s.λ, s.solver; intercept = true, standardize_x = true)
+  standardized_certificate(s, out) = lasso_gap_standardized(s.X, s.y, out.intercept, out.coefficients, s.λ)
+
   add_case!(catalog, "lasso", "lasso", "dense"; scenario = "ls-200x50",
     measure = MEASURE.gap, target = 1e-6,
     build = p -> lasso_inputs(p), call = lasso_call, certify = (p, s, out) -> lasso_certificate(s, out))
+  add_case!(catalog, "lasso", "lasso", "dense-standardized"; scenario = "ls-200x50",
+    measure = MEASURE.gap, target = 1e-6,
+    build = p -> standardized_inputs(p), call = standardized_call,
+    certify = (p, s, out) -> standardized_certificate(s, out))
   for (variant, scenario) in (("tall", "ls-tall-5000x40"), ("wide", "ls-wide-100x400"),
                               ("correlated", "ls-corr-300x100"), ("large", "ls-2000x1000"))
     add_case!(catalog, "lasso", "lasso", variant; scenario, suite = "extended",

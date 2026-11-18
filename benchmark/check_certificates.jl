@@ -1,6 +1,7 @@
-# Controls for the certificate: analytic problems with closed-form values,
+# Controls for the certificates: analytic problems with closed-form values,
 # designed problems whose optimum is known by construction (the data are built
-# from a primal point and a dual point that satisfy the optimality conditions),
+# from a primal point and a dual point that satisfy the optimality conditions;
+# for the standardized fit with an intercept, from β₀ as well),
 # designed nonoptimal points, weak duality and dual feasibility at random
 # points, zero solutions at λ ≥ λmax, nonfinite inputs, and the reproducibility
 # of the scenarios. Needs only the standard library and Test; the last testset
@@ -37,6 +38,20 @@ function designed_lasso(rng; n = 40, p = 8, λ = 0.1)
   θ = dual_with(X, l1_subgradient(rng, β, λ))
   y = X * β .+ n .* θ
   (; X, y, β, λ, θ)
+end
+
+# a standardized lasso with an intercept whose solution (β₀, β) is known by construction: the
+# centred and scaled columns Z and the scales s are those of the certificate; θ is a dual point
+# in the range of Z (whose columns sum to zero, so θ does too) with Z'θ ∈ λ∂‖sβ‖₁, and
+# y = β₀ + Xβ + nθ. The residual of (β₀, β) is then nθ, and the optimality conditions of
+# ‖y - β₀ - Xβ‖²/(2n) + λΣ sⱼ|βⱼ| hold in β₀ and β.
+function designed_standardized(rng; n = 60, p = 8, λ = 0.1, β₀ = 1.5)
+  X = randn(rng, n, p) .* transpose(0.5 .+ 2 .* rand(rng, p)) .+ transpose(3 .* randn(rng, p))
+  Z, s = centered_scaled(X)
+  β = sparse_vector(rng, p, 3)
+  θ = dual_with(Z, l1_subgradient(rng, β, λ))
+  y = β₀ .+ X * β .+ n .* θ
+  (; X, y, β, β₀, λ, θ, Z, s)
 end
 
 @testset "Relative gap, residuals and scaling" begin
@@ -106,6 +121,62 @@ end
   @test lasso_gap(X32, y32, β32, Float32(d.λ)).value == lasso_gap(Float64.(X32), Float64.(y32), Float64.(β32), Float64(Float32(d.λ))).value
 end
 
+@testset "Standardized lasso certificate with an intercept" begin
+  rng = scenario_rng("certificate-controls-standardized", 1)
+  d = designed_standardized(rng)
+  n = size(d.X, 1)
+  @test all(>(0), d.s) && maximum(abs, sum(d.Z; dims = 1)) < 1e-12
+  # the designed point is optimal: the gap and the dual point
+  c = lasso_gap_standardized(d.X, d.y, d.β₀, d.β, d.λ)
+  @test ok(c) && c.measure === :relative_gap && c.value ≤ TIGHT
+  a = lasso_standardized_parts(d.X, d.y, d.β₀, d.β, d.λ)
+  @test a.θ ≈ d.θ atol = 1e-12
+  # the primal value is the weighted objective in the original coordinates
+  r = d.y .- d.β₀ .- d.X * d.β
+  @test a.P ≈ dot(r, r) / (2n) + d.λ * dot(d.s, abs.(d.β)) rtol = 1e-12
+  # a perturbed intercept raises the primal value by δ²/2 and misses the target of 1e-6, in either direction
+  for δ in (1e-2, -1e-2, 0.1)
+    p = lasso_standardized_parts(d.X, d.y, d.β₀ + δ, d.β, d.λ)
+    @test p.P - a.P ≈ δ^2 / 2 rtol = 1e-6
+    @test lasso_gap_standardized(d.X, d.y, d.β₀ + δ, d.β, d.λ).value > 1e-6
+  end
+  # perturbed coefficients with the designed intercept miss it too
+  for scale in (0.5, 1.5)
+    @test lasso_gap_standardized(d.X, d.y, d.β₀, scale .* d.β, d.λ).value > 1e-6
+  end
+  # weak duality and dual feasibility at random points
+  for _ in 1:5
+    β = d.β .+ 0.3 .* randn(rng, length(d.β))
+    β₀ = d.β₀ + 0.3 * randn(rng)
+    a = lasso_standardized_parts(d.X, d.y, β₀, β, d.λ)
+    @test ok(lasso_gap_standardized(d.X, d.y, β₀, β, d.λ))
+    @test all(abs.(transpose(d.Z) * a.θ) .<= d.λ * (1 + 1e-12))
+    @test a.D ≤ a.P && a.D ≤ lasso_standardized_parts(d.X, d.y, d.β₀, d.β, d.λ).P + 1e-13
+  end
+  # a column that is constant has scale 0 and is ignored by the penalty
+  Xc = [d.X fill(2.0, n)]
+  @test lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.0], d.λ).value ≤ TIGHT
+  @test ok(lasso_gap_standardized(Xc, d.y, d.β₀, [d.β; 0.5], d.λ))
+  # at λ ≥ λmax = maxⱼ |zⱼ'ỹ|/n of the centred and scaled problem the solution is β = 0, β₀ = ȳ
+  ỹ = d.y .- fixed_mean(d.y)
+  λmax = maximum(abs.(transpose(d.Z) * ỹ)) / n
+  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), λmax).value ≤ TIGHT
+  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), 2λmax).value ≤ TIGHT
+  @test lasso_gap_standardized(d.X, d.y, fixed_mean(d.y), zeros(8), 0.9λmax).value > 1e-4
+  # element types are converted, and invalid inputs are uncertifiable
+  X32, y32, β32 = Float32.(d.X), Float32.(d.y), Float32.(d.β)
+  @test lasso_gap_standardized(X32, y32, 1.5f0, β32, Float32(d.λ)).value ==
+        lasso_gap_standardized(Float64.(X32), Float64.(y32), 1.5, Float64.(β32), Float64(Float32(d.λ))).value
+  for v in (NaN, Inf)
+    @test bad(lasso_gap_standardized(d.X, d.y, v, d.β, d.λ))
+    @test bad(lasso_gap_standardized(d.X, d.y, d.β₀, [v; d.β[2:end]], d.λ))
+    @test bad(lasso_gap_standardized(d.X, d.y, d.β₀, d.β, v))
+  end
+  @test bad(lasso_gap_standardized(d.X, d.y, d.β₀, d.β, 0.0))
+  @test bad(lasso_gap_standardized(d.X, d.y, d.β₀, d.β, -0.1))
+  @test bad(lasso_gap_standardized(d.X, d.y[1:end-1], d.β₀, d.β, d.λ))
+end
+
 @testset "Invalid and nonfinite inputs are uncertifiable" begin
   rng = scenario_rng("certificate-controls-nonfinite", 1)
   X, y = randn(rng, 20, 4), rand(rng, 20)
@@ -168,9 +239,21 @@ if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTI
       r = y .- X * coef(fit)
       @test lasso_parts(X, y, coef(fit), λ).P ≈ dot(r, r) / (2length(y)) + λ * sum(abs, coef(fit)) rtol = 1e-12
     end
-    # the case table: a quick lasso case meets its target, and the control misses its own
-    catalog = build_catalog("extended", ["lasso", "controls"], [r"lasso/lasso/(dense|float32)$", r"one-pass"])
-    @test [c.meta.id for c in catalog] == ["controls/lasso/one-pass", "lasso/lasso/dense", "lasso/lasso/float32"]
+    # the standardized fit with an intercept on the raw inputs, against the certificate of its own objective
+    for (key, ratio) in (("ls-200x50", 0.05), ("ls-wide-100x400", 0.1))
+      a = scenario(key, 1)
+      Z, r = standardized(a.X, a.y)
+      λ = ratio * lambda_max(Z, r)
+      fit = lasso(a.X, a.y, λ, CDSolver(; order = :cyclic, momentum = false, tol = 1e-12); intercept = true, standardize_x = true)
+      c = lasso_gap_standardized(a.X, a.y, fit.intercept, fit.coefficients, λ)
+      @test ok(c) && c.value ≤ 1e-9
+      # the same objective in the transformed coordinates: the plain certificate of the unweighted lasso on Z
+      s = [sqrt(sample_mean(abs2.(a.X[:, j] .- sample_mean(a.X[:, j])))) for j in axes(a.X, 2)]
+      @test lasso_gap(Z, r, fit.coefficients .* s, λ).value ≤ 1e-9
+    end
+    # the case table: the quick lasso cases meet their targets, and the control misses its own
+    catalog = build_catalog("extended", ["lasso", "controls"], [r"lasso/lasso/(dense|dense-standardized|float32)$", r"one-pass"])
+    @test [c.meta.id for c in catalog] == ["controls/lasso/one-pass", "lasso/lasso/dense", "lasso/lasso/dense-standardized", "lasso/lasso/float32"]
     for spec in catalog
       problem = scenario(spec.meta.scenario, 1)
       prepared = spec.build(problem)
@@ -178,9 +261,12 @@ if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTI
       @test ok(cert) && string(cert.measure) == spec.meta.measure
       spec.meta.group == "controls" ? (@test cert.value > spec.meta.target) : (@test cert.value ≤ spec.meta.target)
     end
-    # a reproducible run: equal coefficients from two fresh copies of the prepared inputs
-    spec = only(build_catalog("quick", ["lasso"]))
-    prepared = spec.build(scenario(spec.meta.scenario, 1))
-    @test coef(spec.call(deepcopy(prepared))) == coef(spec.call(deepcopy(prepared)))
+    # a reproducible run: equal coefficients (and intercepts) from two fresh copies of the prepared inputs
+    @test sort([c.meta.id for c in build_catalog("quick", ["lasso"])]) == ["lasso/lasso/dense", "lasso/lasso/dense-standardized"]
+    for spec in build_catalog("quick", ["lasso"])
+      prepared = spec.build(scenario(spec.meta.scenario, 1))
+      a, b = spec.call(deepcopy(prepared)), spec.call(deepcopy(prepared))
+      @test coef(a) == coef(b)
+    end
   end
 end

@@ -20,6 +20,19 @@
 #
 # With λ = 0 the certificate does not use a duality gap: it reports the KKT
 # residual ‖X'r/n‖∞ (measure :kkt_residual), relative to max(1, ‖X'y‖∞/n).
+#
+# `lasso_gap_standardized` is the certificate for the fit with an intercept and
+# column scales (λ > 0), at the stored intercept β₀ and coefficients β:
+#
+#   ‖y - β₀1 - Xβ‖²/(2n) + λ Σⱼ sⱼ|βⱼ|,
+#
+# with sⱼ the root mean square of the centred column xⱼ - x̄ⱼ (0 for a column of
+# exact zeros after centring, which the penalty ignores). Its primal value is
+# evaluated on the raw data at (β₀, β); its dual point comes from the centred and
+# scaled problem, computed here with sums in a fixed order. The relative gap is
+# as above. The profiled minimum over β₀ is the minimum of the centred problem,
+# so the dual value bounds it from below, and a perturbed β₀ raises the primal
+# value and with it the gap.
 
 using LinearAlgebra
 
@@ -100,6 +113,64 @@ function lasso_parts(X, y, β, λ)
   magnitude = abs.(y) .+ abs.(fit)
   scale = dot(magnitude, magnitude) / (2n) + penalty + t * dot(abs.(y), abs.(θ)) + t^2 * dot(r, r) / (2n)
   (; P, D, θ = t .* θ, t, scale, terms = max(n, p), kkt = nothing)
+end
+
+# The mean of v with the terms added in order
+function fixed_mean(v)
+  s = 0.0
+  for t in v
+    s += t
+  end
+  s / length(v)
+end
+
+# The columns of X centred, divided by their root mean squares (columns that are
+# exact zeros after centring stay zero, with scale 0), and the scales; the sums
+# add in a fixed order
+function centered_scaled(X)
+  Z = similar(X)
+  s = zeros(size(X, 2))
+  for j in axes(X, 2)
+    x = view(X, :, j)
+    c = fixed_mean(x)
+    z = x .- c
+    s[j] = sqrt(fixed_mean(abs2.(z)))
+    Z[:, j] = s[j] > 0 ? z ./ s[j] : zero(z)
+  end
+  Z, s
+end
+
+# P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ| for r = y - β₀ - Xβ, from the raw data. The dual point is
+# built from the centred residual u = r - r̄ (which sums to 0): with θ = u/n and
+# t = min(1, λ/‖Z'θ‖∞) for the scaled centred columns Z, it is tθ, and with the centred
+# response ỹ the dual value is D = t ỹ'θ - t² n‖θ‖²/2, a lower bound on the minimum of the
+# centred problem by weak duality.
+function lasso_standardized_parts(X, y, β₀, β, λ)
+  d = cert_regression(X, y, β)
+  d isa String && return d
+  cert_finite(β₀) || return "nonfinite intercept"
+  cert_finite(λ) && λ > 0 || return "λ must be finite and positive"
+  (; X, y, β, n, p) = d
+  β₀, λ = f64(β₀), f64(λ)
+  Z, s = centered_scaled(X)
+  fit = X * β
+  r = y .- β₀ .- fit
+  penalty = λ * dot(s, abs.(β))
+  P = dot(r, r) / (2n) + penalty
+  u = r .- fixed_mean(r)
+  θ = u ./ n
+  ỹ = y .- fixed_mean(y)
+  t = box_scale(transpose(Z) * θ, λ)
+  D = t * dot(ỹ, θ) - t^2 * dot(u, u) / (2n)
+  magnitude = abs.(y) .+ abs(β₀) .+ abs.(fit)
+  scale = dot(magnitude, magnitude) / (2n) + penalty + t * dot(abs.(ỹ), abs.(θ)) + t^2 * dot(u, u) / (2n)
+  (; P, D, θ = t .* θ, t, scale, terms = max(n, p))
+end
+
+function lasso_gap_standardized(X, y, β₀, β, λ)
+  a = lasso_standardized_parts(X, y, β₀, β, λ)
+  a isa String && return uncertifiable(a)
+  relative_gap(a.P, a.D; a.scale, a.terms)
 end
 
 function lasso_gap(X, y, β, λ)
