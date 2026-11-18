@@ -176,7 +176,7 @@ end
   @test a.D ≈ 0.095 rtol = 1e-14
   @test a.t ≈ 0.1 rtol = 1e-14
   @test lasso_gap_standardized(Xu, yu, 0.0, [9e199], 0.1).value <= TIGHT      # the optimum
-  # the exact constant rule: a constant column has scale exactly 0, whatever its mean in floating point
+  # the exact constant rule: a constant column has scale 0, also when the mean of its copies is not exact in floating point
   @test centered_scaled(fill(0.1, 10, 1))[2] == [0.0]
   @test centered_scaled(fill(1 / 3, 7, 2))[1] == zeros(7, 2)
   c = lasso_gap_standardized([fill(0.1, 10) randn(rng, 10)], randn(rng, 10), 0.0, [0.0, 0.0], 0.1)

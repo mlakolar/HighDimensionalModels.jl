@@ -149,8 +149,9 @@ columns, scales and the dual point are computed in 256-bit BigFloat from the sto
 with the terms added in a fixed order, independently of the package, so that no square
 underflows or overflows. The dual point is `tθ` with `θ = u/n` for the centered residual
 `u = r - r̄`, and `t` the largest value up to 1, rounded down to a Float64, with
-`|x̃ⱼ'(tθ)| ≤ λ sⱼ` for every column in the original coordinates; the certificate is `ok` only
-if that holds (checked in BigFloat). The dual value is `D = t ỹ'θ - t² n‖θ‖²/2` for the
+`|x̃ⱼ'(tθ)| ≤ λ sⱼ` in the original coordinates for the columns with `sⱼ > 0` (the others are
+zero after centering); the certificate is `ok` only if that holds to a relative `1e-12` (checked in
+BigFloat). The dual value is `D = t ỹ'θ - t² n‖θ‖²/2` for the
 centered response `ỹ`. In exact arithmetic the minimum of the problem over `β₀` is the minimum of
 the centered problem, so `D` bounds it from below; the computed gap is clamped as above. A
 shift `δ` of `β₀` from the profiled optimum for the fixed `β` raises `P` (by `δ²/2` when the

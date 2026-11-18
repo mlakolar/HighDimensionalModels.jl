@@ -35,8 +35,9 @@
 # in a fixed order, so that no square underflows or overflows. Its primal value is
 # evaluated on the raw data at (β₀, β) in Float64. The dual point comes from the
 # centred and scaled problem; it is scaled down (rounding the scale down to a
-# Float64) until |x̃ⱼ'θ| ≤ λ sⱼ holds for every column in the original coordinates,
-# which is checked in BigFloat, and the certificate is :ok only if it holds. A
+# Float64) so that |x̃ⱼ'θ| ≤ λ sⱼ in the original coordinates, for the columns with sⱼ > 0
+# (the others have x̃ⱼ = 0); this is checked in BigFloat, and the certificate is :ok only if
+# it holds to a relative 1e-12. A
 # column that is not all zeros after centring and whose scale is not a normal
 # Float64 (it rounds to zero, is subnormal, or is not finite) makes the
 # certificate :uncertifiable. The relative gap is as above. In exact arithmetic
@@ -166,7 +167,7 @@ end
 # A scale that is not a normal Float64 for a column that is not all zeros: its index, or 0
 function bad_scale(Xt, s)
   for j in eachindex(s)
-    (iszero(s[j]) && any(!iszero, view(Xt, :, j))) && return j     # cannot happen in BigFloat
+    (iszero(s[j]) && any(!iszero, view(Xt, :, j))) && return j     # the squares of Float64 entries are in the range of BigFloat
     iszero(s[j]) && continue
     sf = Float64(s[j])
     (isfinite(sf) && sf >= floatmin(Float64)) || return j
@@ -189,7 +190,7 @@ end
 # P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ| for r = y - β₀ - Xβ, from the raw data in Float64. The dual
 # point is built from the centred residual u = r - r̄ (which sums to 0 in exact arithmetic):
 # θ = u/n, scaled to tθ with the largest t ≤ 1 (rounded down to a Float64) such that
-# |x̃ⱼ'(tθ)| ≤ λ sⱼ for every column j, the constraint in the original coordinates (the same as
+# |x̃ⱼ'(tθ)| ≤ λ sⱼ for the columns j with sⱼ > 0, the constraint in the original coordinates (the same as
 # |Zⱼ'(tθ)| ≤ λ for the scaled columns Zⱼ = x̃ⱼ/sⱼ). With the centred response ỹ the dual value
 # is D = t ỹ'θ - t² n‖θ‖²/2, a lower bound on the minimum of the centred problem by weak
 # duality. The sums for D, t and the feasibility `feasibility` = maxⱼ |x̃ⱼ'(tθ)|/(λ sⱼ) are
