@@ -438,6 +438,45 @@ setprecision(BigFloat, 256) do
     end
   end
 
+  @testset "a negative λ is refused with alpha < 1, also when its sign vanishes in rounding, $T, $(label(ic, st))" for T in (Float32, Float64), (ic, st) in COMBOS
+    # X = (-1, 1)', y = (-1, 1): the least squares coefficient is 1, which a negative λ that became a zero
+    # level would return
+    X = reshape(T[-1, 1], 2, 1); y = T[-1, 1]
+    kw = (; intercept = ic, standardize_x = st)
+    # native negative subnormals and small values, and values that convert to -0.0 in T (BigFloat,
+    # Rational, a Float64 below the range of Float32), and ordinary negative values
+    negatives = Real[-nextfloat(zero(T)), -floatmin(T), T(-0.1), -1, -2, -1 // 10, -1e-100, -big"1e-400", -big"1e-5000", -1 // big(10)^400]
+    for λ in negatives
+      for alpha in (0.2, 0.5, 0.8)
+        @test_throws "nonnegative" lasso(X, y, λ, cyc(T); alpha, kw...)
+        @test_throws "λ" lasso(X, y, λ, cyc(T); alpha, kw...)
+        @test_throws ArgumentError lasso(X, y, λ, cyc(T); alpha, kw...)
+      end
+      # with alpha omitted, or 1, or rounding to 1, the refusal is ProximalBase's or ProximalSolvers', unchanged
+      direct = try NormL1(λ); nothing catch e; e end
+      refusals = [try lasso(X, y, λ, cyc(T); kw...); nothing catch e; e end,
+                  try lasso(X, y, λ, cyc(T); alpha = 1, kw...); nothing catch e; e end]
+      T === Float32 && push!(refusals, try lasso(X, y, λ, cyc(T); alpha = 1 - 1e-9, kw...); nothing catch e; e end)
+      for e in refusals
+        @test e isa ArgumentError
+        @test !occursin("with alpha < 1", sprint(showerror, e))
+        direct === nothing || @test sprint(showerror, e) == sprint(showerror, direct)
+      end
+    end
+    # -0.0 is not negative: it is the zero level, as on the lasso path, and the fit is least squares
+    for alpha in (0.2, 0.5, 0.8)
+      f = lasso(X, y, -zero(T), cyc(T); alpha, kw...)
+      l = lasso(X, y, -zero(T), cyc(T); kw...)
+      @test f.λ === -zero(T) && f.alpha === T(alpha) && l.λ === -zero(T)
+      @test f.coefficients ≈ l.coefficients atol = 1e-5
+      @test f.coefficients ≈ T[1] atol = 1e-5
+    end
+    # a NaN or an infinite λ is still refused downstream, and a positive level that converts to 0 by HDM
+    for λ in (NaN, Inf, -Inf)
+      @test_throws ArgumentError lasso(X, y, λ, cyc(T); alpha = 0.5, kw...)
+    end
+  end
+
   @testset "errors with alpha < 1 are those of the lasso, $T" for T in (Float32, Float64)
     X, y = problem(T, 15, 20, 4)
     # the fallback method names the keyword alpha

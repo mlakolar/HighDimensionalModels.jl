@@ -25,8 +25,9 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   that is `1` in that type gives the lasso; one that is `0`, or an ℓ₁ level `λα` that underflows to
   `0` for `λ > 0`, would be a ridge penalty alone and throws an `ArgumentError` (ridge alone is not
   supported). `LassoSolution` has a new field `alpha`, placed after `λ`, with the effective
-  `T(alpha)` (`1` for the lasso); `show` prints it when it is below 1. `dof` is the count of nonzero
-  coefficients that glmnet reports for `alpha < 1`, not an unbiased estimate. No agreement with glmnet
+  `T(alpha)` (`1` for the lasso); `show` prints it when it is below 1. `dof` is the number of nonzero
+  slopes, plus one with an intercept; for `alpha < 1` the number of nonzero slopes is the count that
+  glmnet reports, and the count is not an unbiased estimate. No agreement with glmnet
   is claimed: glmnet scales `y` internally, which changes the ridge part unless `sd(y) = 1`.
 - The loss and the penalty are ProximalBase's and the solver is ProximalSolvers' `CDSolver`; the
   package contains no optimization code. Runtime dependencies are ProximalBase, ProximalSolvers

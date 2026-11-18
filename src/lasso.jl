@@ -25,7 +25,7 @@ optimality certificate; see [`lasso`](@ref).
 `result` is the result of ProximalSolvers on the problem it was given,
 `‖ỹ - Zθ‖²/(2n) + λ(α‖θ‖₁ + (1 - α)‖θ‖²/2)` (the lasso `‖ỹ - Zθ‖²/(2n) + λ‖θ‖₁` when `alpha` is
 `1`), where `Z` and `ỹ` are the centred and scaled data of [`lasso`](@ref) (`X` and `y` themselves
-with both keywords false). With `standardize_x = true`, `result.minimizer` is `θ`; in exact arithmetic
+with `intercept` and `standardize_x` both false). With `standardize_x = true`, `result.minimizer` is `θ`; in exact arithmetic
 `θⱼ = sⱼ βⱼ` for the mathematical back-map `βⱼ = θⱼ/sⱼ`, but the stored slopes are the rounded
 divisions `θⱼ/sⱼ` in `T` with `0` for a column of scale `0` (see the limit of the back-map in
 [`lasso`](@ref)), so `θⱼ = sⱼ βⱼ` need not hold for them. `result.minimum` is
@@ -62,8 +62,8 @@ end
 Minimize `‖y - β₀1 - Xβ‖² / (2n) + λ Σⱼ (α sⱼ|βⱼ| + (1 - α) sⱼ²βⱼ²/2)` over `β₀` and `β`, with
 `n = size(X, 1)`, by coordinate descent. `X` must be a `Matrix{T}` and `y` a `Vector{T}`, with `T`
 equal to `Float32` or `Float64`, and `λ` a `Real`; `solver` is a `CDSolver`. Other argument types
-throw an `ArgumentError`, and nothing is converted. `X` and `y` are not modified, and the solution
-keeps no reference to them.
+throw an `ArgumentError`, and `X` and `y` are not converted. `X` and `y` are not modified, and the
+solution keeps no reference to them.
 
 With the defaults `alpha = 1, intercept = false, standardize_x = false`, `β₀ = 0` and `sⱼ = 1` for
 all `j`: the objective is `‖y - Xβ‖² / (2n) + λ‖β‖₁`, and the descent starts at `β = 0` on `X` and
@@ -84,6 +84,13 @@ all `j`: the objective is `‖y - Xβ‖² / (2n) + λ‖β‖₁`, and the desc
     `λ₂ = λ_T * (1 - α)` computed in `T`, so that `fit.λ * fit.alpha` is `λ₁` and
     `fit.λ * (1 - fit.alpha)` is `λ₂`. With `λ = 0` this is least squares.
 
+  With `α < 1` in `T`, this function checks `λ` itself before converting it: a negative `λ`
+  (`λ < 0`, which excludes `-0.0`) throws an `ArgumentError` that names `λ` and says it must be
+  nonnegative, also when it would round to `-0.0` or `0` in `T`. A `NaN`, an infinite `λ`, and a
+  `λ` whose levels `λ₁`, `λ₂` are not representable in `T` are refused by ProximalBase and
+  ProximalSolvers on those two levels, and their errors are not altered. With `α = 1` in `T` this
+  function adds no check on `λ`: see the lasso checks below.
+
   No agreement with glmnet is claimed: glmnet scales `y` internally, which changes the ridge part
   unless `sd(y) = 1`.
 - `intercept = true` fits `β₀`. The columns of `X` and the response are centred at their means,
@@ -103,9 +110,9 @@ all `j`: the objective is `‖y - Xβ‖² / (2n) + λ‖β‖₁`, and the desc
 The problem is solved on the centred and scaled data: `Z` has the columns `(xⱼ - x̄ⱼ)/sⱼ`, `ỹ` is
 `y - ȳ` with an intercept and `y` without one, and the solver minimizes
 `‖ỹ - Zθ‖²/(2n) + λ(α‖θ‖₁ + (1 - α)‖θ‖²/2)`, the unweighted lasso when `α = 1`; then
-`βⱼ = θⱼ/sⱼ` and `β₀ = ȳ - x̄ᵀβ`. With both keywords false `X` and `y`
-are not copied and the solver works on them. A keyword that is not `true` or `false`
-throws an `ArgumentError`. If a mean, a scale, an entry of `Z`, `β` or `β₀` is not finite (for
+`βⱼ = θⱼ/sⱼ` and `β₀ = ȳ - x̄ᵀβ`. With `intercept` and `standardize_x` both false `X` and `y`
+are not copied and the solver works on them. An `intercept` or `standardize_x` that is not `true`
+or `false` throws an `ArgumentError`. If a mean, a scale, an entry of `Z`, `β` or `β₀` is not finite (for
 example, entries of opposite signs near `floatmax(T)` that overflow when centred), an
 `ArgumentError` names `X` or `y` and the step. Standardization lets a design whose squares overflow
 (for example `Float32` columns near `1e20`) be fit, which the default call refuses, provided that
@@ -120,17 +127,19 @@ the solver returns `θ = 1e-100` with minimum `0`, the stored coefficient is `0`
 `1e-400` underflows) and `sum(abs2, residuals(fit))` is `2e-200`. The result of the solver is not
 altered.
 
-`n ≥ 1` is checked here. With a keyword set, so are `length(y) == n` and `p ≥ 1`, which
-ProximalSolvers checks on the default path, and the entries of `X` (and of `y` with an intercept)
-must be finite. The other checks (finite data on the default path, `λ` finite, nonnegative and
-representable in `T`) are those of ProximalBase and ProximalSolvers, and their errors are not
-altered. `λ` reaches the penalty as given, in its own type.
+`n ≥ 1` is checked here. With `intercept` or `standardize_x` set, so are `length(y) == n` and
+`p ≥ 1`, which ProximalSolvers checks when both are false, and the entries of `X` (and of `y` with
+an intercept) must be finite. The other checks (finite data when both are false, and, with
+`α = 1` in `T`, `λ` finite, nonnegative and representable in `T`) are those of ProximalBase and
+ProximalSolvers, and their errors are not altered. With `α = 1` in `T`, `λ` reaches the penalty as
+given, in its own type. With `α < 1` in `T` the checks of `λ` are those described under `alpha`
+above.
 
-The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is `NormL1(λ)`; the
-solve is `ProximalSolvers.solve!`.
+The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is `NormL1(λ)` for
+`α = 1` in `T`, and `ElasticNet(λ₁, λ₂)` otherwise; the solve is `ProximalSolvers.solve!`.
 
 The convergence report is ProximalSolvers' (`fit.result.converged`, `passes`, `maxchange`,
-`tolerance`, `minimum`); with a keyword set it is that of the solver's problem, in the coordinates
+`tolerance`, `minimum`); with `intercept` or `standardize_x` set it is that of the solver's problem, in the coordinates
 `θ` (see [`LassoSolution`](@ref) for the units of `maxchange` and `tolerance`). For this problem `converged` reports the
 coefficient-change test of the solver (the largest change of a coefficient in a full pass, in the
 solver's scaling of the changes, against `tolerance`), not a bound on the distance to the minimum
@@ -159,6 +168,8 @@ function lasso(X::Matrix{T}, y::Vector{T}, λ::Real, solver::CDSolver = CDSolver
   isone(α) && return lasso_solve(X, y, λ, nothing, T(λ), α, solver, intercept, standardize_x)
   iszero(α) && throw(ArgumentError(
     "lasso: alpha = $alpha is 0 in $T, which would be a ridge penalty alone; ridge alone is not supported"))
+  λ < 0 && throw(ArgumentError(
+    "lasso: with alpha < 1 the penalty level λ must be nonnegative, but λ = $λ"))
   λₜ = T(λ)
   λ₁, λ₂ = λₜ * α, λₜ * (one(T) - α)
   λ > 0 && (iszero(λₜ) || iszero(λ₁)) && throw(ArgumentError(
@@ -249,8 +260,8 @@ nobs(fit::LassoSolution) = length(fit.residuals)
     dof(fit::LassoSolution) -> Int
 
 The number of nonzero entries of `fit.coefficients`, plus one when the fit has an intercept. For
-`fit.alpha < 1` this is the count that glmnet reports as its degrees of freedom; it is not an
-unbiased estimate of the degrees of freedom of the fit.
+`fit.alpha < 1` the number of nonzero coefficients is the count that glmnet reports as its degrees
+of freedom; the count is not an unbiased estimate of the degrees of freedom of the fit.
 """
 dof(fit::LassoSolution) = count(!iszero, fit.coefficients) + fit.hasintercept
 

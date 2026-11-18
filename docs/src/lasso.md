@@ -88,8 +88,12 @@ adds the ridge term. Any other value, including a value that is not a `Real`, th
   alone and an `ArgumentError` says so. Otherwise the penalty is ProximalBase's
   `ElasticNet(λ₁, λ₂)` with `λ₁ = λ_T * α` and `λ₂ = λ_T * (1 - α)`, computed in `T`, so that
   `fit.λ * fit.alpha` is `λ₁` and `fit.λ * (1 - fit.alpha)` is `λ₂`. `λ = 0` gives least squares.
+  With `α < 1` in `T`, `lasso` itself refuses a negative `λ` (`λ < 0`; `-0.0` is not negative) with an
+  `ArgumentError` that names `λ`, also when it would round to `-0.0` or `0` in `T`; a `NaN`, an
+  infinite `λ`, and a `λ` whose levels `λ₁`, `λ₂` are not representable in `T` are refused by
+  ProximalBase and ProximalSolvers on those levels.
 - **The solve.** The same `CDSolver` solves the problem on the same transformed data as for the
-  lasso (`Z`, `ỹ`, or `X`, `y` themselves with both keywords `false`), with `ElasticNet(λ₁, λ₂)` in
+  lasso (`Z`, `ỹ`, or `X`, `y` themselves with `intercept` and `standardize_x` both `false`), with `ElasticNet(λ₁, λ₂)` in
   place of the ℓ₁ penalty, and the back-transformation and residuals are those of the lasso.
   With `alpha` omitted, or equal to `1` (or to a value that is `1` in `T`), the penalty is
   `NormL1(λ)` and the call is the lasso call.
@@ -99,8 +103,9 @@ adds the ridge term. Any other value, including a value that is not a `Real`, th
 - **Optimality conditions.** With `zⱼ = x̃ⱼ/sⱼ` (`x̃ⱼ` and `ỹ` as above) and `r = ỹ - Zθ`, a minimizer
   has `|zⱼ'r/n| ≤ λα` where `θⱼ = 0` and `zⱼ'r/n - λ(1 - α)θⱼ = λα sign(θⱼ)` where `θⱼ ≠ 0`.
 - **Not glmnet.** No agreement with glmnet is claimed: glmnet scales `y` internally, which changes
-  the ridge part unless `sd(y) = 1`. Accordingly, `dof(fit)` for `alpha < 1` is the count of nonzero
-  coefficients that glmnet reports, not an unbiased estimate of the degrees of freedom of the fit.
+  the ridge part unless `sd(y) = 1`. Also, `dof(fit)` is the number of nonzero slopes, plus one with an
+  intercept; for `alpha < 1` the number of nonzero slopes is the count that glmnet reports, and the
+  count is not an unbiased estimate of the degrees of freedom of the fit.
 
 Three nearly collinear columns, with a response that depends on all three, fit by the lasso and
 by the elastic net at the same `λ`:
@@ -133,7 +138,7 @@ en_fit
   same `T`. Other array types and mixed element types throw an `ArgumentError` that names the
   supported types.
 - `λ::Real`, finite, nonnegative and representable in `T` (not overflowing to `Inf` and not
-  underflowing to `0` from a nonzero value). It reaches the solver in its own type, so an `Int`,
+  underflowing to `0` from a nonzero value). With `α = 1` in `T` it reaches the solver in its own type, so an `Int`,
   a `Rational` or a `BigFloat` level that `T` represents is accepted, and the stored `fit.λ` is
   `T(λ)`.
 - `size(X, 1) ≥ 1` is checked by this package. The remaining checks (a response of length `n`,
@@ -142,7 +147,7 @@ en_fit
 - `alpha` is a finite `Real` with `0 < alpha ≤ 1` (see [The elastic net](@ref)); it is converted to
   `T`, and the stored `fit.alpha` is `T(alpha)`.
 - `intercept` and `standardize_x` are `true` or `false`; any other value throws an
-  `ArgumentError` that names the keyword. With a keyword set, `size(y, 1) == size(X, 1)` and
+  `ArgumentError` that names the keyword. With `intercept` or `standardize_x` set, `size(y, 1) == size(X, 1)` and
   `size(X, 2) ≥ 1` are checked by this package (a `DimensionMismatch`), and the entries of `X`
   (and of `y` with an intercept) must be finite.
 - `X` and `y` are not modified and the fit keeps no reference to them.
@@ -171,8 +176,8 @@ on the data given to `lasso`, computed once), `λ`, `alpha` (`1` for a lasso fit
 - `predict(fit, Xnew)`: `Xnew * coefficients`, plus the intercept with one; a `Xnew` with another
   number of columns throws a `DimensionMismatch`;
 - `residuals(fit)`, `nobs(fit)`;
-- `dof(fit)`: the number of nonzero coefficients, plus one with an intercept (for `alpha < 1` the count
-  that glmnet reports, not an unbiased estimate);
+- `dof(fit)`: the number of nonzero slopes, plus one with an intercept (for `alpha < 1` the number of
+  nonzero slopes is the count that glmnet reports, and the count is not an unbiased estimate);
 - `deviance(fit)`: the sum of the squared residuals.
 
 With an intercept and standardization:
