@@ -88,12 +88,8 @@ adds the ridge term. Any other value, including a value that is not a `Real`, th
   alone and an `ArgumentError` says so. Otherwise the penalty is ProximalBase's
   `ElasticNet(λ₁, λ₂)` with `λ₁ = λ_T * α` and `λ₂ = λ_T * (1 - α)`, computed in `T`, so that
   `fit.λ * fit.alpha` is `λ₁` and `fit.λ * (1 - fit.alpha)` is `λ₂`. `λ = 0` gives least squares.
-  With `α < 1` in `T`, `lasso` itself refuses `λ < 0`, including `-Inf` (`-0.0` is not negative),
-  with an `ArgumentError` that names `λ`, also when it would round to `-0.0` or `0` in `T`, and
-  refuses `λ > 0` with `λ_T = 0` or `λ₁ = 0` (the ridge case above). A `NaN`, a `+Inf`, and a finite
-  `λ` that is `Inf` in `T` reach `ElasticNet(λ₁, λ₂)` as levels that are `NaN` or `Inf`, and
-  ProximalBase and ProximalSolvers refuse them there; with `α = 1` in `T` `lasso` adds no check on
-  `λ`, and those two packages check it.
+  With `α < 1` in `T`, the checks of `λ` that `lasso` makes itself and those left to ProximalBase
+  and ProximalSolvers are stated in the validation paragraphs of the [`lasso`](@ref) docstring.
 - **The solve.** The same `CDSolver` solves the problem on the same transformed data as for the
   lasso (`Z`, `ỹ`, or `X`, `y` themselves with `intercept` and `standardize_x` both `false`), with `ElasticNet(λ₁, λ₂)` in
   place of the ℓ₁ penalty, and the back-transformation and residuals are those of the lasso.
@@ -139,19 +135,15 @@ en_fit
 - `X::Matrix{T}` and `y::Vector{T}` with `T` equal to `Float32` or `Float64`; the fit has the
   same `T`. Other array types and mixed element types throw an `ArgumentError` that names the
   supported types.
-- `λ::Real`, finite, nonnegative and representable in `T` (not overflowing to `Inf` and not
-  underflowing to `0` from a nonzero value). With `α = 1` in `T` it reaches the solver in its own type, so an `Int`,
-  a `Rational` or a `BigFloat` level that `T` represents is accepted, and the stored `fit.λ` is
-  `T(λ)`.
-- `size(X, 1) ≥ 1` is checked by this package. The remaining checks (a response of length `n`,
-  `p ≥ 1`, finite entries of `X` and `y`, the level `λ`) are those of ProximalBase and
-  ProximalSolvers; their errors are passed on unchanged.
+- `λ::Real`, finite and nonnegative; the stored `fit.λ` is `T(λ)`. With `α = 1` in `T` it reaches
+  the penalty in its own type.
+- Invalid inputs throw an `ArgumentError` or a `DimensionMismatch`. Which checks this package makes
+  and which ProximalBase and ProximalSolvers make, and when their errors pass through unchanged, is
+  stated in the validation paragraphs of the [`lasso`](@ref) docstring.
 - `alpha` is a finite `Real` with `0 < alpha ≤ 1` (see [The elastic net](@ref)); it is converted to
   `T`, and the stored `fit.alpha` is `T(alpha)`.
 - `intercept` and `standardize_x` are `true` or `false`; any other value throws an
-  `ArgumentError` that names the keyword. With `intercept` or `standardize_x` set, `size(y, 1) == size(X, 1)` and
-  `size(X, 2) ≥ 1` are checked by this package (a `DimensionMismatch`), and the entries of `X`
-  (and of `y` with an intercept) must be finite.
+  `ArgumentError` that names the keyword.
 - `X` and `y` are not modified and the fit keeps no reference to them.
 
 ## Result

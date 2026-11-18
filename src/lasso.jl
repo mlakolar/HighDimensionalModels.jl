@@ -129,13 +129,11 @@ the solver returns `θ = 1e-100` with minimum `0`, the stored coefficient is `0`
 `1e-400` underflows) and `sum(abs2, residuals(fit))` is `2e-200`. The result of the solver is not
 altered.
 
-`n ≥ 1` is checked here. With `intercept` or `standardize_x` set, so are `length(y) == n` and
-`p ≥ 1`, which ProximalSolvers checks when both are false, and the entries of `X` (and of `y` with
-an intercept) must be finite. The other checks (finite data when both are false, and, with
-`α = 1` in `T`, `λ` finite, nonnegative and representable in `T`) are those of ProximalBase and
-ProximalSolvers, and their errors are not altered. With `α = 1` in `T`, `λ` reaches the penalty as
-given, in its own type. With `α < 1` in `T` the checks of `λ` are those described under `alpha`
-above.
+`n ≥ 1` is checked here. With `intercept` or `standardize_x` set, `length(y) == n` and `p ≥ 1`
+are checked here too, and `X` (and `y` with an intercept) must have finite entries. The remaining
+checks of the data are those of ProximalBase and ProximalSolvers, and their errors are not altered,
+as are the checks of `λ` when `α = 1` in `T`. With `α = 1` in `T`, `λ` reaches the penalty as given,
+in its own type. With `α < 1` in `T` the checks of `λ` are those described under `alpha` above.
 
 The loss is ProximalBase's `LeastSquaresLoss`, scaled by `1/n`; the penalty is `NormL1(λ)` for
 `α = 1` in `T`, and `ElasticNet(λ₁, λ₂)` otherwise; the solve is `ProximalSolvers.solve!`.

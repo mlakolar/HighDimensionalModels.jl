@@ -60,11 +60,11 @@ conditioning and the rounding of the working type, so the deviations have to be 
 ## Supported inputs
 
 `lasso(X, y, λ, solver = CDSolver())` takes `X::Matrix{T}` and `y::Vector{T}` with `T` equal to
-`Float32` or `Float64`, a real `λ` that is finite, nonnegative and representable in `T`, and an
-optional `CDSolver` from ProximalSolvers (re-exported). Other argument types throw an
-`ArgumentError`; nothing is converted. The other checks are those of ProximalBase and
-ProximalSolvers, and their errors are passed on. The keyword `alpha`, with `0 < alpha ≤ 1`, gives the
-elastic net (see the lasso page of the documentation).
+`Float32` or `Float64`, a real `λ`, and an optional `CDSolver` from ProximalSolvers (re-exported).
+Other argument types throw an `ArgumentError`, and `X` and `y` are not converted. Invalid inputs
+throw an `ArgumentError` or a `DimensionMismatch`; the checks are described in the docstring of
+`lasso`. The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net (see the lasso page of
+the documentation).
 
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
 cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; nonconvex penalties;
