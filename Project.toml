@@ -1,61 +1,32 @@
 name = "HighDimensionalModels"
 uuid = "676596c9-8d02-4dfa-b091-57818f5febe0"
 authors = ["Mladen Kolar <mkolar@chicagobooth.edu>"]
-version = "0.1.0"
+version = "0.2.0-DEV"
 
 [deps]
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 ProximalBase = "0a755509-c5b1-5d6f-9b24-59bcda3c37a3"
 ProximalSolvers = "fc4971f5-6616-4709-9bfc-89a819252f6b"
-Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsAPI = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
 
-[weakdeps]
-Knockoffs = "878bf26d-0c49-448a-9df5-b057c815d613"
-HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
-ProximalAlgorithms = "140ffc9f-1907-541a-a177-7475e0a401e9"
-StatsModels = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
-
-[extensions]
-HighDimensionalModelsKnockoffsExt = "Knockoffs"
-HighDimensionalModelsHiGHSExt = "HiGHS"
-HighDimensionalModelsProximalAlgorithmsExt = "ProximalAlgorithms"
-HighDimensionalModelsStatsModelsExt = "StatsModels"
-
 [compat]
-Knockoffs = "3.1.4"
-HiGHS = "1"
 Aqua = "0.8"
-DelimitedFiles = "1"
 LinearAlgebra = "1"
-PrecompileTools = "1"
-ProximalBase = "0.5.4"
-ProximalAlgorithms = "0.7"
 ParallelTestRunner = "2.10"
-ProximalSolvers = "0.3.1"
+ProximalBase = "0.6"
+ProximalSolvers = "0.3.2"
 Random = "1"
-SparseArrays = "1"
-SpecialFunctions = "2"
-Statistics = "1"
 StatsAPI = "1"
-StatsModels = "0.7"
 TOML = "1"
 Test = "1"
-julia = "1.10"
+julia = "1.10.8"
 
 [extras]
-HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
-DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ParallelTestRunner = "d3525ed8-44d0-4b2c-a655-542cee43accc"
-ProximalAlgorithms = "140ffc9f-1907-541a-a177-7475e0a401e9"
-StatsModels = "3eaba693-59b7-5ba5-a881-562e759f1c8d"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["HiGHS", "DelimitedFiles", "Aqua", "ParallelTestRunner", "ProximalAlgorithms", "StatsModels", "TOML", "Test"]
+test = ["Aqua", "LinearAlgebra", "ParallelTestRunner", "Random", "TOML", "Test"]
