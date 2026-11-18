@@ -234,6 +234,10 @@ an evaluation of the definition of the value in 512-bit arithmetic on a one-colu
 a root of a quadratic, a target between the bounds, invalid inputs, and, with the package, a tight `sqrt_lasso`
 fit and the case itself against its target.
 
+Observation, not a guarantee: with ProximalBase `7d5d1e006b02814fb28f8cfb5eca20a05d73ee9e` and
+ProximalSolvers `a0a064778acb34d0535408a31ab2f09ae657e4aa`, on Julia 1.13.4, repetition 1, the case ended `ok`
+with a certificate value of `1.3e-9`, against the target `1e-4`. Other dependency commits can give other values.
+
 | Status | Meaning |
 |---|---|
 | `ok` | The certificate is valid and its value meets the threshold target. |
