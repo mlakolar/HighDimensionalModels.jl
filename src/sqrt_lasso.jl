@@ -20,20 +20,26 @@ Two statements are kept apart, because they have different strengths.
 **Certification of the transformed problem.** `result.converged` and `result.gap` are those of
 ProximalSolvers and are not recomputed or changed here. `result.converged` is `true` when
 ProximalSolvers' duality certificate proved that the relative gap of the problem it solved is at most
-`1e-4`, and `false` otherwise; `result.gap` is that bound (rounded up in `T`) where it is `true`. The problem it solved is
-`‖ỹ - Zθ‖ + √n λ ‖θ‖₁` for the stored matrix `Z` and vector `ỹ` in `T` (the centred and scaled data of
-[`sqrt_lasso`](@ref), or `X` and `y` themselves with both keywords false), at the point `θ`. In exact
-arithmetic its objective is `√n` times the objective of `sqrt_lasso`. With `result.converged == false`
-the point is not certified, whether the run ended at `maxpasses` or at a point where the certificate is
-undefined; `result.passes` and the warning that ProximalSolvers logs tell the two apart.
+`1e-4`, and `false` otherwise; `result.gap` is that bound (rounded up in `T`) where it is `true`. The
+problem it solved is `‖ỹ - Zθ‖ + λps ‖θ‖₁` for the stored matrix `Z` and vector `ỹ` in `T` (the centred and
+scaled data of [`sqrt_lasso`](@ref), or `X` and `y` themselves with both keywords false), at the level
+`λps = √n λ` of [`sqrt_lasso`](@ref) and the point `θ`. In exact arithmetic its objective is `√n` times
+the objective of `sqrt_lasso`. With `result.converged == false` the point is not certified, whether the
+run ended at `maxpasses` or without a certificate (where the certificate is undefined, or the change
+threshold cannot be lowered further); `result.passes` and the warning that ProximalSolvers logs tell the
+two apart.
 
 **Accuracy in the original coordinates.** This is not certified. The returned `β`, `β₀` and
 `residuals` are formed from `θ` by the back-transformation, and they differ from the transformed
 problem by the rounding of the preprocessing (an absolute error of about `eps(T)(|xᵢⱼ| + |x̄ⱼ|)/sⱼ` in an
 entry of `Z`, and a relative error of up to about `n eps(T)` in a scale `sⱼ`), of `βⱼ = θⱼ/sⱼ` (a
 relative error of `eps(T)/2`), of `β₀` (an error of about `eps(T)(|ȳ| + Σⱼ|x̄ⱼβⱼ|)`, which grows with
-the number of columns) and of the residuals. The page on the square-root lasso gives a duality gap
-computed in the original coordinates, which a user can run on a fit.
+the number of columns) and of the residuals. These sizes hold where the quantity being rounded is in the
+normal range of `T`. A result below `floatmin(T)` is rounded to a subnormal number or to zero, with an
+absolute error of up to `nextfloat(zero(T))/2`, which is a relative error of up to 1: for example, with
+`Float64` data a coefficient `θⱼ/sⱼ ≈ 7e-401` is stored as `0` although `θⱼ ≈ 7e-101` is certified for the
+transformed problem, and the objective of the stored `β` can then be far from the certified one. The page on the
+square-root lasso gives a duality gap computed in the original coordinates, which a user can run on a fit.
 
 `result` is documented on the scale of ProximalSolvers: `result.minimizer` is `θ` (the same vector as
 `coefficients` unless `standardize_x = true`), `result.minimum` is `√n` times the objective of
@@ -74,22 +80,32 @@ keeps no reference to them. `β₀` is `0` and unpenalized unless `intercept = t
 are those of [`lasso`](@ref): `sⱼ = 1` with `standardize_x = false`, and with `standardize_x = true`
 the root mean square of the column `xⱼ - x̄ⱼ` (the centred column with an intercept, the column itself
 without one), so that `Σⱼ sⱼ|βⱼ| = ‖θ‖₁` for the standardized coefficients `θⱼ = sⱼβⱼ`. Without an
-intercept the scale is the uncentred root mean square. A column whose centred entries are all zero (a
-zero column, or a constant column with an intercept) has scale `0`, and its coefficient is `0`.
+intercept the scale is the uncentred root mean square. With `standardize_x = true` a column whose
+centred entries are all zero (a zero column, or a constant column with an intercept) has scale `0`; with
+either value of `standardize_x` the solver keeps such a column at zero, and its coefficient is `0`.
 
 `λ` must be positive and finite: ProximalSolvers' square-root lasso needs a positive level, and a
 `λ` that is zero, negative, `NaN` or infinite throws an `ArgumentError` (for `λ = 0`, `lasso` fits the
 least squares problem). Because `ProximalBase.SqrtLeastSquaresLoss` is the unnormalized `‖y - Xβ‖` and
 ProximalSolvers refuses a scaled square-root loss, the solve is
-`solve!(θ, SqrtLeastSquaresLoss(ỹ, Z), NormL1(λps), solver)` at the level
-`λps = sqrt(Float64(n)) * Float64(λ)`, a `Float64` for either element type, on the data of
-[`lasso`](@ref): `Z` has the columns `(xⱼ - x̄ⱼ)/sⱼ` (`xⱼ - x̄ⱼ` without standardization) and `ỹ` is `y - ȳ`
-with an intercept (`X` and `y` themselves, not copied, with both keywords false). Then `βⱼ = θⱼ/sⱼ`
-and `β₀ = ȳ - x̄ᵀβ`, with the helpers and the error messages of `lasso` for a design or response that
-does not preprocess (a message that starts with `lasso:` and names the column). The level
-`λps` must be representable in `T` without overflow or underflow, a limit on `√n λ`, not on `λ`:
-otherwise ProximalSolvers' error is passed on unchanged. A constant `y` with an intercept centres to
-`ỹ = 0`, which ProximalSolvers certifies at `θ = 0`: `β = 0`, `β₀ = ȳ`, `σ = 0`.
+`solve!(θ, SqrtLeastSquaresLoss(ỹ, Z), NormL1(λps), solver)` on the data of [`lasso`](@ref): `Z` has the
+columns `(xⱼ - x̄ⱼ)/sⱼ` (`xⱼ - x̄ⱼ` without standardization) and `ỹ` is `y - ȳ` with an intercept (`X` and
+`y` themselves, not copied, with both keywords false). Then `βⱼ = θⱼ/sⱼ` and `β₀ = ȳ - x̄ᵀβ`, with the helpers
+and the error messages of `lasso` for a design or response that does not preprocess (a message that starts
+with `lasso:` and names the column or the step).
+
+The level is formed in stages. `λ` is converted to `Float64`, and `λps = sqrt(Float64(n)) * Float64(λ)` is
+computed in `Float64`, a `Float64` level for either element type. If `Float64(λ)` or the product is not
+finite and positive (a `BigFloat` or `Rational` `λ` below the `Float64` range, or a `Float64` `λ` whose
+product overflows), `sqrt_lasso` throws its own `ArgumentError`, "the level √n λ … is not a finite
+positive Float64", and ProximalSolvers is not called. Otherwise ProximalSolvers checks that `λps` is
+representable in `T` without overflow or underflow, and its error is passed on unchanged: that limit is on
+`√n λ` computed in this way, not on `λ`.
+
+For `ỹ = 0` (a zero `y`, or a constant `y` with an intercept, which centres to zeros) the minimizer
+is `θ = 0` for each `λ > 0`: `β = 0`, `β₀ = ȳ` and `σ = 0`. ProximalSolvers certifies it, with `converged =
+true` and `gap = 0`, at its first full pass when the solver settings let that pass meet the change test
+(`maxpasses ≥ 1` and `tol > 0`); otherwise `converged` is `false` for the same point.
 
 `n ≥ 1`, `length(y) == n` and `size(X, 2) ≥ 1` are checked here (a `DimensionMismatch`); the other
 checks (finite data, the level) are those of ProximalBase and ProximalSolvers or of the preprocessing
@@ -103,9 +119,10 @@ warning each; `passes` and the text of the warning tell them apart. This package
 certificate, stopping rule or recovery to the solver's. With `CDSolver()` the coordinate order is
 random; `CDSolver(order = :cyclic, momentum = false)` fixes it.
 
-`σ = ‖r‖/√n` is the root mean square of the residuals on the original data. It is the noise estimate of
-the scaled lasso at the returned coefficients, and it is biased downward in finite samples because the
-fit adapts to `y`.
+`σ = ‖r‖/√n` is the root mean square of the residuals on the original data, the noise estimate of the scaled
+lasso at the returned coefficients. It is a residual-based estimate whose finite-sample bias can have either
+sign: it tends to fall below the noise level where the fit adapts to `y`, and it can exceed it where the fit
+leaves signal in the residuals (for example `β = 0` at a level above `λmax` with a signal present).
 """
 function sqrt_lasso(X::Matrix{T}, y::Vector{T}, λ::Real, solver::CDSolver = CDSolver();
                     intercept = false, standardize_x = true) where {T<:Union{Float32, Float64}}

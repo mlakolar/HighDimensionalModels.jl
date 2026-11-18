@@ -45,7 +45,9 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   unchanged ProximalSolvers result) with the StatsAPI methods `coef`, `predict`, `residuals`, `nobs`, `dof` and
   `deviance`. The solve is ProximalSolvers' square-root coordinate descent on `SqrtLeastSquaresLoss` at the
   level `√n λ`, in `Float64`, on the centred and scaled data of `lasso`. `λ` must be positive and finite
-  (`lasso` fits `λ = 0`), and `√n λ` must be representable in the element type.
+  (`lasso` fits `λ = 0`). The level is converted to `Float64` before the product with `√n`, which `sqrt_lasso`
+  refuses with its own error where `Float64(λ)` or the product is not finite and positive, and the product
+  must be representable in the element type (ProximalSolvers' error is passed on).
 - `fit.result.converged` and `fit.result.gap` are ProximalSolvers' duality certificate of the transformed
   problem, unchanged: `converged = true` means that it proved a relative gap of at most `1e-4`, and a stop
   without a certificate (for example at an exact fit, where the residual is zero) or at `maxpasses` reports
