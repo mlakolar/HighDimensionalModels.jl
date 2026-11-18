@@ -25,10 +25,11 @@ the two repositories (`scripts/dependencies.jl`; the benchmark environment takes
   (no registry version, no repository revision). PS's `Project.toml` has a `[sources]` entry that pins
   PB to an older commit; in the manifests generated here with Julia 1.10 (which ignores `[sources]`)
   and 1.13, PB is tracked by path at the requested commit, not at that pin. The check fails if a
-  manifest ever tracks PB another way. The scripts refuse an environment in which Julia would use another
-  project or manifest than the ones they edit and check: a `JuliaProject.toml`, a top-level `manifest` key
-  in its `Project.toml`, or a `[workspace]` table in a project file above it (a member shares the
-  workspace root's manifest). On Julia 1.13 a `[sources]` entry for PB in the environment's own
+  manifest ever tracks PB another way. `scripts/instantiate.jl ENV_DIR` refuses an existing
+  `ENV_DIR` that has a feature which can change which project or manifest Julia uses (a conservative
+  rule): a `JuliaProject.toml`, a top-level `manifest` key in its `Project.toml`, or a `[workspace]` table
+  in a project file above it. `scripts/test.jl` regenerates the project of its own environment (removing a
+  `JuliaProject.toml` there) and then applies the same check; both reach it before `Pkg.develop`. On Julia 1.13 a `[sources]` entry for PB in the environment's own
   `Project.toml` did not replace the path development (the manifest tracked the path), and a
   `[workspace]` table in the environment's own project leaves its manifest next to it, so neither is refused;
   `verify_manifest` also fails unless its manifest is the one `Base.project_file_manifest_path` selects.

@@ -29,11 +29,14 @@ scripts below.
   is cloned at its commit (detached). An existing one is moved to the requested
   commit only if it has no tracked or untracked changes; otherwise the script
   stops. The scripts look for checkouts only there, not next to this repository.
-- `scripts/test.jl` and `scripts/instantiate.jl ENV_DIR` refuse an environment that
-  has a `JuliaProject.toml`, a top-level `manifest` key in its `Project.toml`, or a
-  `[workspace]` table in a `Project.toml` above it (Julia would then use another
-  project or manifest than the ones the scripts edit and check). They check that the
-  manifest, which is the one Julia selects for the environment, tracks the two checkouts and this package by path (so the check fails if
+- `scripts/instantiate.jl ENV_DIR` refuses an existing `ENV_DIR` that has a
+  `JuliaProject.toml`, a top-level `manifest` key in its `Project.toml`, or a
+  `[workspace]` table in a `Project.toml` above it: these can change which project or
+  manifest Julia uses, so the setup refuses them (a conservative rule).
+  `scripts/test.jl` regenerates the project of its own environment (removing a
+  `JuliaProject.toml` there) and then applies the same check; both reach it before
+  `Pkg.develop`. Both compare the manifest they check with the one Julia selects for
+  the environment, and check that it tracks the two checkouts and this package by path (so the check fails if
   ProximalSolvers' own `[sources]` pin of ProximalBase substitutes another commit),
   and that a Julia process using the environment loads those checkouts at the
   requested commits with clean trees. An environment that cannot be built from the
