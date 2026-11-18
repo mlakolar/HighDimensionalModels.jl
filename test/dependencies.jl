@@ -87,7 +87,9 @@ message(f) = try f(); nothing catch err sprint(showerror, err) end
     mktempdir() do dir
       paths = Dict(name => mkpath(joinpath(dir, name * ".jl")) for name in D.PACKAGES)
       hdm = TOML.parsefile(joinpath(D.ROOT, "Project.toml"))["uuid"]
-      entry(name, path, id; extra = "") = "[[deps.$name]]\nuuid = \"$id\"\npath = \"$path\"\nversion = \"0.6.0-DEV\"\n$extra"
+      # The path is written as a TOML basic string: its backslashes (Windows) are escaped.
+      entry(name, path, id; extra = "") =
+        "[[deps.$name]]\nuuid = \"$id\"\npath = \"$(escape_string(path))\"\nversion = \"0.6.0-DEV\"\n$extra"
       function manifest(; pb = entry("ProximalBase", paths["ProximalBase"], D.uuid("ProximalBase")),
                          ps = entry("ProximalSolvers", paths["ProximalSolvers"], D.uuid("ProximalSolvers")),
                          me = entry("HighDimensionalModels", D.ROOT, hdm))
