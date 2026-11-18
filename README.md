@@ -63,11 +63,12 @@ conditioning and the rounding of the working type, so the deviations have to be 
 `Float32` or `Float64`, a real `λ` that is finite, nonnegative and representable in `T`, and an
 optional `CDSolver` from ProximalSolvers (re-exported). Other argument types throw an
 `ArgumentError`; nothing is converted. The other checks are those of ProximalBase and
-ProximalSolvers, and their errors are passed on.
+ProximalSolvers, and their errors are passed on. The keyword `alpha`, with `0 < alpha ≤ 1`, gives the
+elastic net (see the lasso page of the documentation).
 
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
-cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and
-nonconvex penalties; generalized linear models; group, sparse-group and multitask regression;
+cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; nonconvex penalties;
+generalized linear models; group, sparse-group and multitask regression;
 quantile regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient
 models; post-selection inference; integer, sparse and view designs.
 
