@@ -92,7 +92,7 @@ end
 # group's columns correlated, and three active groups with three nonzero coefficients each. The
 # columns of a group become X_G ← √0.7 X_G + √0.3 z sdᵀ, with z one Gaussian draw shared by the group
 # and sd the standard deviations of its columns. The fields are those of `least_squares`; the groups
-# are a function of the shape, so that every scenario field stays an array of Float64.
+# are a function of the shape, so that the scenario fields stay arrays of Float64.
 const GROUPED_SHAPE = (ngroups = 12, size = 5)
 grouped_groups(ngroups, size) = [collect((g - 1) * size + 1:g * size) for g in 1:ngroups]
 

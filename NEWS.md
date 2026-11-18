@@ -20,8 +20,8 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
 - Group lasso: `group_lasso(X, y, λ, groups, solver = CDSolver(); intercept = true,
   standardize = :orthonormal, groupweights = nothing)` for a dense `Matrix{Float32}` or
   `Matrix{Float64}`, over ProximalBase's `GroupNormL2` and `BlockIterate` and ProximalSolvers' block
-  coordinate descent. For disjoint nonempty `groups` that contain all the columns (not necessarily
-  contiguous) and weights `wₖ` (default `√|Gₖ|`), it minimizes `‖y - β₀1 - Xβ‖² / (2n) +
+  coordinate descent. For disjoint nonempty `groups` that contain all the columns (contiguous or
+  not) and weights `wₖ` (default `√|Gₖ|`), it minimizes `‖y - β₀1 - Xβ‖² / (2n) +
   λ Σₖ wₖ‖X̃_{Gₖ}β_{Gₖ}‖ / √n` with `:orthonormal` (the penalty is on the contribution of each group to the
   fitted values, which makes the fit independent of the basis of a group), where `X̃` has centred columns
   with an intercept, or `‖y - β₀1 - Xβ‖² / (2n) + λ Σₖ wₖ‖β_{Gₖ}‖` with `:none`. With `:orthonormal` each

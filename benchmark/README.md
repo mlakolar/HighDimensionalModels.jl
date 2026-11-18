@@ -207,10 +207,10 @@ intercept and coefficients, with `X̃` centered at the exact means. The dual poi
 centered residual, and `t ≤ 1` is such that `u` is feasible in exact arithmetic: `‖P_G u‖ ≤ √n λ wₖ` with `P_G` the
 projector onto the full column span of `X̃_G`, built from all its columns (the Gram matrix of `X̃_G` must be positive
 definite in exact arithmetic, otherwise the case is `uncertifiable`; no direction is dropped), or
-`‖X̃_G'u‖/n ≤ λ wₖ`. The dual value `D` is then at most the objective at every `(β₀, β)`. The stored inputs are
-converted exactly to rational numbers and `r_c`, the Gram matrices, `X̃_G'u` and `D` are computed exactly, so there
-is no rounding error to bound; only the square roots of the penalty and the conversions to Float64 are rounded, with
-directed rounding in 256-bit BigFloat, which gives `P_lo ≤ P ≤ P_hi` and `D_lo ≤ D ≤ D_hi`. As for
+`‖X̃_G'u‖/n ≤ λ wₖ` for each group. The dual value `D` is then at most the objective at all `(β₀, β)`. The stored
+inputs are converted to rational numbers without rounding, and `r_c`, the Gram matrices, `X̃_G'u` and `D` are
+computed in rational arithmetic, so there is no rounding error to bound there; the square roots of the penalty and the
+conversions to Float64 are rounded, with directed rounding in 256-bit BigFloat, which gives `P_lo ≤ P ≤ P_hi` and `D_lo ≤ D ≤ D_hi`. As for
 `dense-standardized`, the value is the upper bound `value_hi` of the relative gap
 `max(P - D, 0)/max(P, floatmin)` and the certificate is `uncertifiable` when `value_lo ≤ target < value_hi`. A problem
 with `λ = 0` or a weight of zero has no dual point of this form and is `uncertifiable`; no KKT residual is reported

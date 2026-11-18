@@ -377,32 +377,32 @@ end
 #
 # The dual point is u = t r_c with r_c = r - r̄1 the centred residual of r = y - β₀1 - Xβ, and θ = u/n. For
 # any θ that sums to 0, ‖r‖²/(2n) ≥ θ'r - n‖θ‖²/2, and θ'r = ỹ'θ - Σₖ θ'X̃_Gₖ β_Gₖ with ỹ = y - ȳ1 (θ sums to 0),
-# so that P(β₀, β) ≥ D = ỹ'θ - n‖θ‖²/2 = t ỹ'r_c/n - t² ‖r_c‖²/(2n) whenever |θ'X̃_G β_G| ≤ λ w ‖X̃_G β_G‖/√n
-# (orthonormal) or ≤ λ w ‖β_G‖ (not) for every group, which holds for every β_G if
+# so that P(β₀, β) ≥ D = ỹ'θ - n‖θ‖²/2 = t ỹ'r_c/n - t² ‖r_c‖²/(2n) if |θ'X̃_G β_G| ≤ λ w ‖X̃_G β_G‖/√n
+# (orthonormal) or ≤ λ w ‖β_G‖ (not) for each group. These inequalities hold for all β_G if
 #
 #   orthonormal:  ‖P_G u‖ ≤ √n λ w,  P_G the projector on the FULL column span of X̃_G,
 #                 that is u'X̃_G (X̃_G'X̃_G)⁻¹ X̃_G'u ≤ n λ² w²;
 #   not:          ‖X̃_G'u‖/n ≤ λ w.
 #
-# Since D is below the minimum over β₀ and β, P - D bounds P - P*, and a point with a larger P than the
-# minimum has D below it too. The projector is built from all the columns of the group, never from a
-# truncated set of directions (which can underestimate ‖P_G u‖ and make u infeasible): when the Gram matrix
-# of X̃_G is not positive definite in exact arithmetic the certificate is `uncertifiable`.
+# D is at most the minimum over β₀ and β, so P - D bounds P - P* from above for a feasible u. The projector is
+# built from all the columns of the group, and not from a truncated set of directions (which can underestimate
+# ‖P_G u‖ and make u infeasible): when the Gram matrix of X̃_G is not positive definite in rational arithmetic
+# the certificate is `uncertifiable`.
 #
-# Arithmetic. Every stored Float64 input is converted exactly to a rational number (BigInt numerator and
-# denominator), and r, r̄, r_c, the centred columns, the Gram matrices, X̃_G'u and the quantities that
-# enter P and D (except the square roots) are computed exactly: there is no rounding to bound, unlike the
-# error model of `lasso_standardized_parts`. The factor t is a rational number (a 256-bit BigFloat, exact as
-# a rational) with t² ≤ min over the groups of nλ²w²/(u₁'X̃_G(X̃_G'X̃_G)⁻¹X̃_G'u₁) (orthonormal) or
-# n²λ²w²/‖X̃_G'u₁‖² (not), u₁ = r_c, and t ≤ 1, so that the dual point is feasible in exact arithmetic; the
-# condition is checked exactly. The square roots of the penalty are bracketed by 256-bit BigFloat bounds
-# computed with directed rounding (operands nonnegative), and D is converted to BigFloat with directed
-# rounding. So P_lo ≤ P ≤ P_hi and D_lo ≤ D ≤ D_hi hold in exact arithmetic, and
-# value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin) and value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin)
-# (the first computed rounding up and the second rounding down, then converted to Float64 in the same
-# direction) satisfy value_lo ≤ the relative gap max(P - D, 0)/max(P, floatmin) ≤ value_hi. As in
-# `lasso_gap_standardized`, the certificate is `uncertifiable` when value_lo ≤ target < value_hi, and
-# otherwise returns value_hi, so that the verdict of the harness is the true one.
+# Arithmetic. Each stored Float64 input is converted without rounding to a rational number (BigInt numerator and
+# denominator), and r, r̄, r_c, the centred columns, the Gram matrices, X̃_G'u and the quantities that enter P and
+# D (apart from the square roots) are computed in rational arithmetic: there is no rounding to bound, unlike the
+# error model of `lasso_standardized_parts`. The factor t is a rational number (a 256-bit BigFloat, which is
+# a rational) with t ≤ 1 and t² ≤ nλ²w²/(r_c'X̃_G(X̃_G'X̃_G)⁻¹X̃_G'r_c) (orthonormal) or t² ≤ n²λ²w²/‖X̃_G'r_c‖²
+# (not) for each group, so that the dual point is feasible; the inequality is checked in rational arithmetic.
+# The square roots of the penalty are bracketed by 256-bit BigFloat bounds computed with directed rounding
+# (the operands are nonnegative), and D is converted to BigFloat with directed rounding. So P_lo ≤ P ≤ P_hi and
+# D_lo ≤ D ≤ D_hi hold in exact arithmetic, and value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin) and
+# value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin) (the first computed rounding up and the second rounding
+# down, then converted to Float64 in the same direction) satisfy value_lo ≤ the relative gap
+# max(P - D, 0)/max(P, floatmin) ≤ value_hi. As in `lasso_gap_standardized`, the certificate is
+# `uncertifiable` when value_lo ≤ target < value_hi, and otherwise returns value_hi, so that the verdict of the
+# harness is the true one.
 #
 # Not a gap. With λ = 0 or a weight of zero there is no such dual point; the certificate refuses these
 # problems as `uncertifiable`, and a KKT residual is not reported in its place.
@@ -410,8 +410,8 @@ end
 # the exact rational numbers of the certificate
 const GroupRational = Rational{BigInt}
 
-# A 256-bit BigFloat bound of the rational q: the numerator and the denominator are converted exactly
-# (at a precision above their bit lengths) and the quotient is rounded in the direction `mode`
+# A 256-bit BigFloat bound of the rational q: the numerator and the denominator are converted without
+# rounding (at a precision above their bit lengths) and the quotient is rounded in the direction `mode`
 # (RoundDown: at most q; RoundUp: at least q)
 function rational_bound(q::GroupRational, mode)
   bits = max(ndigits(abs(numerator(q)); base = 2), ndigits(denominator(q); base = 2), 256) + 2
@@ -421,8 +421,8 @@ function rational_bound(q::GroupRational, mode)
   end
 end
 
-# gᵀG⁻¹g, exactly, for a symmetric matrix G and a vector g of rational numbers, by elimination (LDLᵀ); nothing
-# if a pivot is not positive, that is if G is not positive definite
+# gᵀG⁻¹g for a symmetric matrix G and a vector g of rational numbers, in rational arithmetic by elimination
+# (LDLᵀ); nothing if a pivot is not positive, that is if G is not positive definite
 function posdef_quadratic(G::AbstractMatrix{GroupRational}, g::AbstractVector{GroupRational})
   m = length(g)
   A, b = copy(G), copy(g)
@@ -444,7 +444,7 @@ function posdef_quadratic(G::AbstractMatrix{GroupRational}, g::AbstractVector{Gr
 end
 
 # A rational t ≥ 0 with t² ≤ x (a rational x ≥ 0), close to √x: the square root of a 256-bit lower bound of x,
-# rounded down, lowered until the inequality holds exactly
+# rounded down, lowered until the inequality holds in rational arithmetic
 function rational_sqrt_below(x::GroupRational)
   x == 1 && return one(GroupRational)
   b = setprecision(BigFloat, 256) do

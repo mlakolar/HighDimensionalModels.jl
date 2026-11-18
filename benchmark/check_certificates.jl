@@ -481,7 +481,7 @@ end
   @test ok(c)
   @test c.value ≈ (12.5 - (25t - 12.5t^2)) / 12.5 rtol = 1e-14
   # the exact gap here is irrational, so its bounds are two adjacent Float64 numbers: a target equal to the lower
-  # one cannot be decided (uncertifiable), a target above the upper one is met and one below the lower one is missed
+  # is not decided (uncertifiable), a target above the upper one is met and one below the lower one is missed
   @test a.gap_lo < a.gap && a.gap == nextfloat(a.gap_lo)
   c = group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false, target = a.gap_lo)
   @test bad(c) && occursin("could change the verdict", c.note)
@@ -584,7 +584,7 @@ end
   groups, w, β = [[1, 2], [3, 4]], [1.0, 1.0], zeros(4)
   base = group_gap(X, y, sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 1e-6)
   @test ok(base)
-  # a group of linearly dependent columns (exactly, in rational arithmetic): no projector of the full span
+  # a group of columns that are linearly dependent in rational arithmetic: no projector of the full span
   Xd = Float64[1 0 1 2; 0 1 1 0; 1 1 2 1; 2 1 3 3; 0 2 2 0; 1 0 1 0]
   c = group_gap(Xd, [1.0, 2, 3, 4, 5, 7], 3.5, zeros(4), 0.05, [[1, 2, 3], [4]], [1.0, 1.0]; orthonormal = true, target = 1e-6)
   @test bad(c) && occursin("linearly dependent", c.note)
@@ -619,7 +619,7 @@ end
     c = group_gap(Xa, ya, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = true, target)
     @test ok(c) && c.value == 0.765625
   end
-  # a gap that is exactly zero is certified at any target
+  # a gap of zero is certified at a tiny target
   @test group_gap(Xa, ya, 10.0, [0.875, 6.125], 0.625, [[1, 2]], [1.0]; orthonormal = true, target = 1e-300).value == 0
 end
 

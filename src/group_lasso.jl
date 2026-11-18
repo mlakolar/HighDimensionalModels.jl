@@ -51,9 +51,8 @@ const RANK_TOLERANCE_C = 10.0
 # The tolerance τ_G = c √max(n, m) eps(T) |R₁₁| of the rank decision of a group of m columns of n
 # rows, where |R₁₁| is the first diagonal entry of the triangular factor of the pivoted QR of
 # its (centred) columns, which is the largest column norm. A diagonal entry |Rᵢᵢ| above τ_G
-# counts toward the rank (see `group_basis`). This function is the only place where the
-# tolerance is computed. The value is a Float64, so that a Float32 factor of any magnitude does
-# not overflow it.
+# counts toward the rank (see `group_basis`). The rank decision takes the tolerance from this function.
+# The value is a Float64, so that a finite Float32 factor does not overflow it.
 rank_tolerance(::Type{T}, n::Integer, m::Integer, r11::Real) where {T<:AbstractFloat} =
   RANK_TOLERANCE_C * sqrt(max(n, m)) * Float64(eps(T)) * Float64(r11)
 
@@ -82,7 +81,7 @@ function group_basis(A::Matrix{T}) where {T<:AbstractFloat}
   (; Z = rootn .* Q[:, 1:r], R = UpperTriangular(R[1:r, 1:r] ./ rootn), pivots = F.p[1:r])
 end
 
-# The groups as lists of columns of a design with p columns: disjoint, nonempty, with every
+# The groups as lists of columns of a design with p columns: disjoint, nonempty, with each
 # column in one group. Returns copies as Vector{Vector{Int}}; each failure has its own message.
 function check_groups(groups, p::Int)
   owner = zeros(Int, p)
@@ -203,7 +202,7 @@ end
                 groupweights = nothing) -> GroupLassoSolution
 
 The group lasso by block coordinate descent. For disjoint, nonempty `groups` `G₁, …, G_K` of the
-columns of `X` that together contain every column, weights `wₖ` and `n = size(X, 1)`, it minimizes
+columns of `X` that together contain all the columns, weights `wₖ` and `n = size(X, 1)`, it minimizes
 over `β₀` and `β`
 
     ‖y - β₀1 - Xβ‖² / (2n) + λ Σₖ wₖ ‖X̃_{Gₖ} β_{Gₖ}‖₂ / √n     (standardize = :orthonormal, the default)

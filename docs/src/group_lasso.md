@@ -38,7 +38,7 @@ with as many columns (a rescaling of a column, or a recombination of the columns
 `β_G ↦ M⁻¹β_G` gives the same fitted values and the same penalty, so the estimate of the fitted values is
 unchanged, in exact arithmetic. In floating point the statement holds where the computed rank of the group
 (below) is the same before and after the transformation and `M` is well conditioned; the tests assert it
-only under those two conditions. The weights are part of the objective: with the default weights, adding a
+under those two conditions. The weights are part of the objective: with the default weights, adding a
 redundant column to a group changes its size and so its weight `wₖ = √|Gₖ|`, and with it the fit; to compare
 a group with and without a column, give the same weights.
 
@@ -60,15 +60,16 @@ a message of its own, for an empty group, an entry that is not an integer, an in
 index repeated within a group, a column in two groups, and a column in no group (give it a group of its
 own; a weight of zero leaves a group unpenalized). `groupweights` is `nothing` or one weight per group
 (`DimensionMismatch` for another length, `ArgumentError` for a negative, `NaN` or infinite weight or one
-that `T` cannot represent); the weights used are stored in `fit.groupweights`, converted to `T`.
+that is not representable in `T`); the weights used are stored in `fit.groupweights`, converted to `T`.
 `λ` must be finite, nonnegative and representable in `T`, and is converted to `T`
 for the penalty: a `BigFloat`, `Rational` or `Int` level works, and `1e300` with `Float32` data throws.
 
 Let `λmax` be the following value. With the groups of weight zero profiled out (`U` their span,
 `r₀ = ỹ - P_U ỹ`; `r₀ = ỹ` if there is none), it is the largest value over the groups of positive weight of
 `‖P_{Gₖ} r₀‖/(√n wₖ)` for `:orthonormal`, with `P_G` the projector on the span of the columns `X̃_G`, and of
-`‖X̃_{Gₖ}ᵀ r₀‖/(n wₖ)` for `:none`. In exact arithmetic, every group of positive weight is zero in a minimizer
-if and only if `λ ≥ λmax`; without a group of weight zero this is `β = 0`, `β₀ = ȳ`.
+`‖X̃_{Gₖ}ᵀ r₀‖/(n wₖ)` for `:none`. In exact arithmetic the groups of positive weight are all zero in a minimizer
+when `λ ≥ λmax`, and some group of positive weight is nonzero in each minimizer when `λ < λmax`; without a group of
+weight zero the first case is `β = 0`, `β₀ = ȳ`.
 
 ## Rank, the tolerance and rank deficiency
 
@@ -85,12 +86,12 @@ package (`rank_tolerance`). A group of columns that are linear combinations of o
 below `m`: the columns `P[r+1:end]` get the coefficient `0`, and the others carry the
 fit of the group. Pivoted QR does not decide which column of a redundant set is dropped, so a dependent column
 added to a group need not be the one with the zero coefficient; the fitted values and the contribution
-`X̃_G β_G` of the group do not depend on that choice, and the number of nonzero coefficients of the group is at
+`X̃_G β_G` of the group do not depend on that choice up to rounding, and the number of nonzero coefficients of the group is at
 most its rank.
 
 A group of rank `0` (zero columns, or constant columns with an intercept) stays in the fit as one column
 of zeros, which the solver keeps at zero, so the groups of the fit are the groups given, and
-its coefficients are `0`. A design in which every group has rank `0` returns the zero fit, with
+its coefficients are `0`. A design in which all the groups have rank `0` returns the zero fit, with
 `β₀ = ȳ` (or `0` without an intercept).
 
 ## Example: a categorical predictor coded by dummy columns

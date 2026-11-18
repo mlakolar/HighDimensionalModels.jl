@@ -10,11 +10,11 @@ module GroupLassoTest
 #   * least squares at λ = 0 and the closed form of a single group, `(1 - √n λ w/‖P_G ỹ‖)₊ P_G ỹ`,
 #     and its decoupling over groups that are orthogonal after centring;
 #   * λmax from the data, with the groups of weight zero profiled out;
-#   * invariance of the fit to rescaling or recombining the columns of a group, asserted only
-#     where the computed rank and the condition number of the transformation permit it;
+#   * invariance of the fit to rescaling or recombining the columns of a group, asserted where the
+#     computed rank and the condition number of the transformation permit it;
 #   * the rows of the numerical regression suite of PR #215 that apply to group_lasso.
 # The tolerances of the optimality conditions are formulas stated at `kkt` below. The rank decision
-# (`HighDimensionalModels.group_basis`, with its provisional tolerance) is exercised only on cases
+# (`HighDimensionalModels.group_basis`, with its provisional tolerance) is exercised on cases
 # whose diagonal entries of R are far from any plausible threshold: a dependent column
 # (|Rᵢᵢ|/|R₁₁| of the order of eps(T)) and genuine directions (at least 1e-2 relative).
 
@@ -129,8 +129,8 @@ function objective(X, y, fit)
   end
 end
 
-# λmax with the groups of weight zero profiled out: the smallest λ at which every group of positive
-# weight is zero. With U the span of the groups of weight zero and r₀ = ỹ - P_U ỹ (ỹ itself if there is
+# λmax with the groups of weight zero profiled out: the smallest λ at which all the groups of positive
+# weight are zero. With U the span of the groups of weight zero and r₀ = ỹ - P_U ỹ (ỹ itself if there is
 # none): max over the groups of positive weight of ‖P_G r₀‖/(√n w) (:orthonormal) or ‖X̃_Gᵀr₀‖/(n w) (:none).
 function lambda_max(X, y, groups, w, intercept, standardize)
   setprecision(BigFloat, 256) do
@@ -334,7 +334,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
       @test cond(Float64.(Diagonal([1, s, 1]))) ≤ 10
       fit = group_lasso(Xs, y, λ, groups, cyc(T))
       @test norm(fitted(y, fit) - fitted(y, base)) ≤ tolfit(T, κ * 4, 3, ynorm)
-      # only the coefficient of the column changes, by the factor 1/s: the coefficients of the
+      # the coefficient of the column changes by the factor 1/s, the others do not: the coefficients of the
       # scaled design, multiplied by the column scales, are those of the original design, to the
       # fitted-value tolerance divided by the smallest singular value of the centred design
       back = copy(fit.coefficients)
@@ -519,7 +519,7 @@ centred_norm(y) = (v = Float64.(y); norm(v .- sum(v) / length(v)))
     w = [0.0, sqrt(2.0), sqrt(2.0)]
     top = lambda_max(X, y, groups, w, true, std)
     ynorm = centred_norm(y)
-    # above λmax only the unpenalized group is in the fit: the least squares on its columns
+    # above λmax the fit is the unpenalized group alone: the least squares on its columns
     fit = group_lasso(X, y, T(2top), groups, cyc(T); standardize = std, groupweights = w)
     ref = setprecision(BigFloat, 256) do
       yb = BigFloat.(y)
