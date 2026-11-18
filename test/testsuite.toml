@@ -13,6 +13,7 @@ parallel = [
   "ci_plan",
   "dependencies",
   "lasso",
+  "lasso_intercept",
   "lasso_reference",
   "smoke",
   "statsapi",
