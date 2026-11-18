@@ -25,8 +25,8 @@ problem it solved is `‖ỹ - Zθ‖ + λps ‖θ‖₁` for the stored matrix 
 scaled data of [`sqrt_lasso`](@ref), or `X` and `y` themselves with both keywords false), at the level
 `λps = √n λ` of [`sqrt_lasso`](@ref) and the point `θ`. In exact arithmetic its objective is `√n` times
 the objective of `sqrt_lasso`. With `result.converged == false` the point is not certified, whether the
-run ended at `maxpasses` or without a certificate (where the certificate is undefined, or the change
-threshold cannot be lowered further); `result.passes` and the warning that ProximalSolvers logs tell the
+run ended at `maxpasses` or without a certificate (the conditions are those of the `CDSolver`
+documentation of ProximalSolvers); `result.passes` and the warning that ProximalSolvers logs tell the
 two apart.
 
 **Accuracy in the original coordinates.** This is not certified. The returned `β`, `β₀` and
@@ -103,9 +103,12 @@ representable in `T` without overflow or underflow, and its error is passed on u
 `√n λ` computed in this way, not on `λ`.
 
 For `ỹ = 0` (a zero `y`, or a constant `y` with an intercept, which centres to zeros) the minimizer
-is `θ = 0` for each `λ > 0`: `β = 0`, `β₀ = ȳ` and `σ = 0`. ProximalSolvers certifies it, with `converged =
-true` and `gap = 0`, at its first full pass when the solver settings let that pass meet the change test
-(`maxpasses ≥ 1` and `tol > 0`); otherwise `converged` is `false` for the same point.
+is `θ = 0` for each `λ > 0`: `β = 0`, `β₀ = ȳ` and `σ = 0`. ProximalSolvers handles an all-zero response with all
+coefficients zero before its test of the size of the residual and certifies it (`converged = true`, `gap = 0`)
+at a full pass that its check reaches; whether a run reaches that check depends on the solver settings (see
+the `CDSolver` documentation of ProximalSolvers). For a run that reaches the check, the certificate is undefined
+for a nonzero residual whose root mean square is below about `1.4e-146` on the scale of the transformed
+problem, and the run then ends with `converged = false`.
 
 `n ≥ 1`, `length(y) == n` and `size(X, 2) ≥ 1` are checked here (a `DimensionMismatch`); the other
 checks (finite data, the level) are those of ProximalBase and ProximalSolvers or of the preprocessing

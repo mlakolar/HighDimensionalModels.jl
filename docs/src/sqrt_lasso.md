@@ -159,10 +159,12 @@ intercept also `1ᵀu = 0`. For every `b`, and with an intercept every `b₀` (w
 `‖y - b₀1 - Xb‖ + Λ Σⱼ sⱼ|bⱼ| ≥ uᵀ(y - b₀1 - Xb) + Λ Σⱼ sⱼ|bⱼ| ≥ uᵀy`, by Cauchy–Schwarz, the bound on
 `|x̃ⱼᵀu|` and, with an intercept, `1ᵀu = 0`. So `D = uᵀy` is a lower bound of the minimum `P*`, and
 `P = ‖r‖ + Λ Σⱼ sⱼ|βⱼ|` is an upper bound. When `D > 0`, `0 < D ≤ P* ≤ P` and `(P - D)/D` bounds
-`(P - P*)/P*` for the returned point. When `D ≤ 0`, which can happen at a point that is far from the minimum
+`(P - P*)/P*` for the returned point, up to the rounding of the 256-bit evaluation. When `D ≤ 0`, which can happen at a point that is far from the minimum
 (for example after one pass), `(P - D)/D` is not a bound of anything and can be negative, so the function below
 returns `Inf`; it also returns `Inf` when `r_c = 0`, where `u` is undefined. It computes the quantities in
-256-bit arithmetic from the raw `X` and `y`. The level defaults to `fit.λ`, which is `T(λ)`; pass the `λ` given
+256-bit arithmetic from the raw `X` and `y`, a high-precision evaluation and not a rigorous enclosure; it clamps
+the numerator `P - D` at zero, because that rounding can leave the computed `D` slightly above `P` at a point
+that is at the minimum. The level defaults to `fit.λ`, which is `T(λ)`; pass the `λ` given
 to `sqrt_lasso` as `λ` when it is not a number of `T`.
 
 ```@example sqrt_lasso
@@ -182,7 +184,7 @@ function dual_gap(X, y, fit; λ = fit.λ, intercept = fit.hasintercept, standard
     g = maximum((abs(sum(Xt[:, j] .* rc)) / s[j] for j in 1:p if s[j] > 0); init = zero(BigFloat)) / N
     t = g > Λ ? Λ / g : one(BigFloat)
     D = t * sum(rc .* yb) / N
-    D > 0 ? Float64((P - D) / D) : Inf            # a bound of (P - P*)/P* only where D > 0
+    D > 0 ? Float64(max(P - D, zero(P)) / D) : Inf   # a bound of (P - P*)/P* only where D > 0
   end
 end
 
@@ -210,7 +212,7 @@ y3 = [-3.347462601798711, -0.633491262245945, -0.808003710231016]
 point = (coefficients = [2.3328834555906037, -1.3745674525556815], intercept = 0.0, hasintercept = false, λ = 1e-5)
 checks = (zero_design = dual_gap(X0, y0, fit0), zero_response = dual_gap(Xe, zeros(4), fite),
           negative_dual = dual_gap(X3, y3, point; standardize_x = false))
-@assert checks.zero_design < 1e-60 && isinf(checks.zero_response) && isinf(checks.negative_dual)
+@assert abs(checks.zero_design) < 1e-60 && isinf(checks.zero_response) && isinf(checks.negative_dual)
 checks
 ```
 
@@ -231,32 +233,26 @@ fitu = sqrt_lasso(Xu, yu, 0.1, CDSolver(order = :cyclic, momentum = false))
 
 ## Where the certificate is defined
 
-ProximalSolvers' certificate runs at the first full pass whose largest coefficient change is below the
-threshold `result.tolerance` (`tol‖ỹ‖` with the default `relative = true`), and when it does not pass
-the threshold is divided by 100, at most twice. The run stops without a certificate, with
-`converged = false` and `gap = NaN`, in these cases (see the `CDSolver` documentation of ProximalSolvers
-for the complete rules):
+A run of ProximalSolvers' square-root coordinate descent ends with a certificate (`converged = true`, and
+`gap` the proved bound), without one (`converged = false`, `gap = NaN`, and a warning "stopped without a
+duality certificate"), or at `maxpasses` (`converged = false`, `gap = NaN`, and a warning "did not converge in
+maxpasses"). `passes` and the text of the warning tell the last two apart. When a run reaches the certificate,
+how the threshold is tightened, and the range in which the certificate is defined are those of the
+`CDSolver` documentation of ProximalSolvers (its section on the square-root lasso), which this package does not
+restate, change or supplement with a certificate, a stopping rule or a recovery path. Two statements of that
+documentation are used on this page, for a run that reaches the certificate check:
 
-- the recomputed residual of the transformed problem is zero while some `θⱼ ≠ 0`, so that the dual
-  direction `r/‖r‖` is undefined: the usual outcome at an exact fit `y = Xβ` with a positive level, where a
-  coordinatewise minimum need not be a minimum;
-- the sum of squares of that residual is below `n 2⁻⁹⁶⁹` (a root mean square below about `1.4e-146`
-  on the scale of the transformed problem), outside the range of the proof;
-- a pass changed nothing, or the threshold cannot be lowered below its floor.
-
-A stop at `maxpasses` also gives `converged = false` and `gap = NaN`. The two are told apart by `passes`
-and by the warning that ProximalSolvers logs (the text of the first is "stopped without a duality
-certificate", of the second "did not converge in maxpasses"). `sqrt_lasso` adds no certificate, stopping
-rule or recovery path.
+- the certificate is undefined where the recomputed residual of the transformed problem is zero while some
+  `θⱼ ≠ 0` (the usual outcome at an exact fit `y = Xβ` with a positive level, where a coordinatewise minimum
+  need not be a minimum), and where that residual is nonzero with a sum of squares below `n 2⁻⁹⁶⁹` (a root mean
+  square below about `1.4e-146` on the scale of the transformed problem): the run then ends with
+  `converged = false`;
+- ProximalSolvers handles a response `ỹ` that is all zero, with all coefficients zero, before that test, and
+  certifies it (`converged = true`, `gap = 0`).
 
 For `ỹ = 0`, which a zero response gives and a constant response with an intercept gives (it centres to zeros),
-the minimizer is `θ = 0`, so `β = 0`, `β₀ = ȳ` and `σ = 0`. ProximalSolvers certifies it, with
-`converged = true` and `gap = 0`, at its first full pass if the settings let that pass meet the change test
-(`maxpasses ≥ 1` and `tol > 0`); with `maxpasses = 0`, or with `tol = 0`, the run ends with `converged = false`
-at the same point. With a zero design the minimizer is `β = 0` with `β₀ = ȳ` (`β₀ = 0` without an intercept).
-Whether ProximalSolvers certifies it depends on the settings and on the range of the certificate: when the
-residual (here `ỹ`) has a root mean square below about `1.4e-146`, the certificate is undefined and the run ends
-with `converged = false` (for example a zero design with `y = 2.0^-500 .* [-1, 1, -1, 1]`).
+the minimizer is `θ = 0`, so `β = 0`, `β₀ = ȳ` and `σ = 0`; the second statement above applies to it. With a zero
+design the minimizer is `β = 0` with `β₀ = ȳ` (`β₀ = 0` without an intercept), and the residual is `ỹ`.
 
 ```@example sqrt_lasso
 exact = sqrt_lasso(Float64[1 2; 2 0; 3 1; 6 1], 5 .+ [1, 2, 3, 6] ./ 2, 0.5,

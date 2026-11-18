@@ -27,12 +27,14 @@ module SqrtLassoTest
 # here, never as a negative number that a comparison with 1e-4 would accept. ProximalSolvers' certificate is a
 # bound of the same ratio, on its own problem.
 #
-# The perturbation term ω of (b), in the normal range. The derivation assumes that the nonzero quantities that
-# are rounded (the means, the centred entries, the scales, the entries of Ẑ and ỹ̂, the coefficients β̂, the
-# intercept, the residuals, and the Float64 level) is at least floatmin of its type in magnitude, so that a
-# rounding error is relative, at most u = eps(T)/2; `normal_range` below checks this precondition on a fit. A
-# result below floatmin is rounded with an absolute error up to nextfloat(zero)/2, a relative error up to 1, and
-# the bounds below do not hold (a fixture with β̂ⱼ = 0 for θⱼ ≠ 0 is tested as such).
+# The perturbation term ω of (b). The derivation assumes that the nonzero quantities that are rounded (the means,
+# the centred entries, the scales, the entries of Ẑ and ỹ̂, the coefficients β̂, the intercept, the residuals) are
+# normal numbers of T, so that a rounding error is relative, at most u = eps(T)/2, and that the level λps = √n λ in
+# Float64 has a relative conversion error at most η_Λ below. A result below floatmin is rounded with an absolute
+# error up to nextfloat(zero)/2, a relative error up to 1, and the bounds below do not hold. The tests assert (b)
+# only on fixtures inside `claim_b_domain` below, a sufficient condition on the inputs (with a check on the
+# solution) under which these premises are argued to hold; outside it (a fixture with β̂ⱼ = 0 for θⱼ ≠ 0, a
+# scaled entry that underflows, a level converted from a subnormal λ, scales 2^±400) (b) is not asserted.
 # The solver sees Ẑ and ỹ̂, the rounded centred and scaled data in T, and returns θ; the stored β̂ⱼ = fl(θⱼ/ŝⱼ)
 # and β̂₀ = fl(ȳ̂ - x̄̂ᵀβ̂) are formed from them. Let Zⱼ, ỹ be the exact centred and scaled data, φ = Sβ̂ (exact weights s),
 # δ₀ = ȳ - x̄ᵀβ̂ - β̂₀, r̂ = ỹ̂ - Ẑθ and E = Ẑ - Z. Then
@@ -173,21 +175,26 @@ end
 transformed(X, y, ic, st) = ic || st ? HDM.preprocess(X, y, ic, st) : (; Z = X, ỹ = y)
 level(λ, n) = sqrt(Float64(n)) * Float64(λ)
 
-# The precondition of ω (see the header): the nonzero quantities that the derivation rounds are normal numbers
-# of their type. It checks the exact means, centred entries and scales, the stored Z and ỹ, the stored β, β₀ and
-# residuals, the level in Float64, and that no coefficient underflowed in the back-map (θⱼ ≠ 0 with β̂ⱼ = 0). It
-# is a diagnostic of the fixtures: a fit that fails it is outside the range of claim (b).
-function normal_range(X::Matrix{T}, y, fit, ic, st, λ) where T
-  d = transformed(X, y, ic, st)
+# A SUFFICIENT condition for the premises of the derivation of ω (see the header), not a checker of them: inputs
+# with n, p ≤ 1000, nonzero entries of X and y of magnitude in [2⁻⁴⁰, 2⁴⁰], and λ in [2⁻²⁰, 2²⁰]; and, after the
+# fit, every nonzero θⱼ and β̂ⱼ a normal number of T, with θⱼ ≠ 0 exactly where β̂ⱼ ≠ 0 (no underflow in the back-map;
+# the solution can be small, so this part depends on the fit). Why the premises then hold (an argument, with wide
+# margins, not a proof): nonzero entries in that range are multiples of ulp(2⁻⁴⁰) (at least 2⁻⁶³ for Float32), so a
+# nonzero exact mean of at most 1000 of them, centred entry and root mean square of centred entries are each at
+# least 2⁻⁸⁰ in magnitude and at most 2⁵¹, and the nonzero entries of Z (after the division by a scale) and of ỹ
+# at least 2⁻¹²⁰ and at most 2⁵¹, above floatmin(T) (2⁻¹²⁶ for Float32, with much more room for Float64) and far
+# below floatmax; the sums and products that the preprocessing and the back-map round are of such numbers, so their rounding
+# errors are relative to the terms, and an absolute underflow error of at most nextfloat(zero(T))/2 per term (a
+# product of an entry and a small coefficient) is below G times the smallest quantity in the bounds; λps lies in
+# [2⁻²⁰, 2²⁵] and λ is a Float32 or Float64 number (or converts to a normal Float64), so the conversion error is
+# at most η_Λ.
+function claim_b_domain(X::Matrix{T}, y, fit, λ) where T
+  n, p = size(X)
+  inrange(v) = iszero(v) || 2.0^-40 <= abs(v) <= 2.0^40
+  normal(v) = abs(v) >= floatmin(T)
   θ = fit.result.minimizer
-  setprecision(BigFloat, 256) do
-    ref = reference(X, y, ic, st)
-    normal(v, ::Type{U}) where U = iszero(v) || abs(v) >= BigFloat(floatmin(U))
-    all(normal(v, T) for A in (ref.x̄, ref.Xt, ref.rms, ref.yt) for v in A) && normal(ref.ȳ, T) &&
-      all(normal(v, T) for A in (d.Z, d.ỹ, fit.coefficients, fit.residuals) for v in A) && normal(fit.intercept, T) &&
-      all(j -> iszero(θ[j]) || !iszero(fit.coefficients[j]), eachindex(θ)) &&
-      level(λ, size(X, 1)) >= floatmin(Float64)
-  end
+  n <= 1000 && p <= 1000 && all(inrange, X) && all(inrange, y) && 2.0^-20 <= λ <= 2.0^20 &&
+    all(j -> (iszero(θ[j]) && iszero(fit.coefficients[j])) || (normal(θ[j]) && normal(fit.coefficients[j])), 1:p)
 end
 
 # The normalized KKT violation of the stored transformed problem, relative to the level Λps. With
@@ -214,7 +221,7 @@ end
 # claims (a) and (b) for a fit of `sqrt_lasso(X, y, λ, ...; intercept = ic, standardize_x = st)`, when it
 # reports `converged`; the observed ratio of the two gaps' difference to ω is recorded in `margins`
 const margins = Float64[]
-function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, tight = true) where T
+function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, tight = true, claim_b = true) where T
   n = size(X, 1)
   @test fit.result.converged
   d = transformed(X, y, ic, st)
@@ -233,10 +240,16 @@ function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, ti
   # The slack 1e-8 relative + 1e-12 absolute is empirical, for these fixtures; it is not derived (the assertion
   # a.gap <= 1e-4 above is the claim)
   tight && @test a.gap <= Float64(fit.result.gap) * (1 + 1e-8) + 1e-12
-  # (b) accuracy in the original coordinates: 1e-4 plus the perturbation term, for a fit in the normal range
-  @test normal_range(X, y, fit, ic, st, λ)
-  @test b.weak && b.gap <= 1e-4 + b.ω
-  isfinite(b.ω) && b.ω > 0 && push!(margins, max(b.gap - a.gap, 0) / b.ω)
+  # (b) accuracy in the original coordinates: 1e-4 plus the perturbation term, asserted inside claim_b_domain only;
+  # outside it the fixture is checked to be outside, and the bound is not asserted (weak duality still holds)
+  @test b.weak
+  if claim_b
+    @test claim_b_domain(X, y, fit, λ)
+    @test b.gap <= 1e-4 + b.ω
+    isfinite(b.ω) && b.ω > 0 && push!(margins, max(b.gap - a.gap, 0) / b.ω)
+  else
+    @test !claim_b_domain(X, y, fit, λ)
+  end
   (a, b)
 end
 
@@ -449,8 +462,9 @@ end
         @test isapprox(g.coefficients, c .* f.coefficients; rtol = T === Float64 ? 1e-8 : 1e-4)
         @test isapprox(g.σ, c * f.σ; rtol = T === Float64 ? 1e-8 : 1e-4) && isapprox(g.intercept, c * f.intercept; rtol = T === Float64 ? 1e-8 : 1e-4)
         @test g.coefficients ≈ c .* f.coefficients rtol = 1e-4
-        # the fit is certified on its own scale: claim (a) at the scaled data
-        check_certified(g, X, c .* y, λ, ic, st)
+        # the fit is certified on its own scale: claim (a) at the scaled data (claim (b) is not asserted: the scaled
+        # entries are outside the domain)
+        check_certified(g, X, c .* y, λ, ic, st; claim_b = false)
       end
     end
     # design scale, X -> c X: with standardization β scales by 1/c and λ is unchanged; without it λ -> c λ
@@ -594,7 +608,7 @@ end
     # columns of ±1e300 and a response of size 1e-100: the standardized coefficient θ is about 7e-101 and
     # θ/s about 7e-401, below the range of Float64, so β is stored as 0. ProximalSolvers certifies θ for the
     # transformed problem (claim (a) holds), and the stored point is far from the minimum in the original
-    # coordinates: the raw-data gap is not below 1e-4 + ω, and the normal-range precondition detects the case
+    # coordinates: the raw-data gap is not below 1e-4 + ω, and claim_b_domain excludes the case
     X = reshape([-1e300, 1e300, -1e300, 1e300], 4, 1)
     y = 1e-100 .* [-1.0, 1.0, -0.5, 0.5]
     λ = 0.1
@@ -607,7 +621,29 @@ end
     b = dual_gap(X, y, f.intercept, f.coefficients, sqrt(BigFloat(4)) * BigFloat(λ);
                  intercept = false, standardize = true, eps_T = eps(Float64), pre = true)
     @test b.gap > 1e-4 + b.ω && b.gap > 1
-    @test !normal_range(X, y, f, false, true, λ)
+    @test !claim_b_domain(X, y, f, λ)
+  end
+
+  @testset "claim (b) is not asserted outside claim_b_domain: two more fixtures (Float64)" begin
+    # a scaled entry that underflows: X[2]/s is about 1.4e-408 and is stored as 0 in Z, below floatmin
+    X = reshape([1e308, 1e-100, -1e308, 0.0], 4, 1)
+    y = [1.0, 2.0, -1.0, -2.0]
+    f = quiet(() -> sqrt_lasso(X, y, 1.0, cyc(Float64)))
+    d = HDM.preprocess(X, y, false, true)
+    unrounded = BigFloat(X[2]) / BigFloat(d.s[1])
+    @test iszero(d.Z[2]) && 0 < unrounded < BigFloat(floatmin(Float64))
+    @test !claim_b_domain(X, y, f, 1.0)
+    @test f.result.converged ? f.result.gap <= 1e-4 : isnan(f.result.gap)      # as ProximalSolvers reports
+    # a normal level from a subnormal Float64(λ): λ = 2⁻¹⁰²⁸ + 0.49·2⁻¹⁰⁷⁴ converts to 2⁻¹⁰²⁸, a relative error of
+    # about 7e-15, above the η_Λ = 4·2⁻⁵³ of the derivation, while the Float64 level 64 Float64(λ) = floatmin is normal
+    λ = BigFloat(2)^-1028 + BigFloat("0.49") * BigFloat(2)^-1074
+    Xl, yl = zeros(4096, 1), repeat([-1.0, 1.0], 2048)
+    f = quiet(() -> sqrt_lasso(Xl, yl, λ, cyc(Float64)))
+    lvl = level(λ, 4096)
+    exact = sqrt(BigFloat(4096)) * λ
+    @test Float64(λ) < floatmin(Float64) && lvl >= floatmin(Float64)
+    @test abs(BigFloat(lvl) - exact) / exact > 4 * BigFloat(2)^-53
+    @test !claim_b_domain(Xl, yl, f, λ) && iszero(f.coefficients)
   end
 
   @testset "the independent gap is Inf, not negative, where the dual value is not positive" begin
@@ -618,12 +654,13 @@ end
     β = [2.3328834555906037, -1.3745674525556815]
     b = dual_gap(X, y, 0.0, β, sqrt(BigFloat(3)) * BigFloat(1e-5); intercept = false, standardize = false)
     @test b !== nothing && b.D < 0 && b.P > 0 && b.gap == Inf && !(b.gap <= 1e-4)
-    # at no point of a one-pass run is the reported gap negative
+    # at 20 sampled final iterates of one-pass runs the independent gap is not negative (beyond the rounding of
+    # the 256-bit evaluation)
     for seed in 1:20
       Xs, ys = randn(Xoshiro(seed), 3, 2), randn(Xoshiro(100 + seed), 3)
       f = quiet(() -> sqrt_lasso(Xs, ys, 1e-5, CDSolver(order = :cyclic, momentum = false, maxpasses = 1); standardize_x = false))
       g = dual_gap(Xs, ys, 0.0, f.coefficients, sqrt(BigFloat(3)) * BigFloat(1e-5); intercept = false, standardize = false)
-      @test g === nothing || g.gap >= 0
+      @test g === nothing || g.gap >= -1e-60
     end
   end
 
