@@ -185,13 +185,14 @@ end
 # and value_hi ≥ value_lo > target is a miss too). The shared `relative_gap` is bypassed: its
 # rounding allowance and Float64 clamp would break this argument. The certificate is also
 # uncertifiable when the error bounds contradict weak duality (P_hi < D_lo), when the dual point
-# cannot be shown feasible, when (eP + eD)/max(P_lo, floatmin) > 1e-8, when P or D is not a normal
-# Float64, and, for a column that is not constant (positive scale), when its scale is not a normal
+# cannot be shown feasible, when (eP + eD)/max(P_lo, floatmin) > 1e-8, when a nonzero P or D would
+# be reported as zero, a subnormal number or a non-finite number (a zero value is accepted), and, for a column that is not constant (positive scale), when its scale is not a normal
 # Float64, is 0, or is not above its error bound (constant columns have scale 0 and no bound). The
 # 1e-8 cap is not needed for the verdict, which the rule above settles; it keeps the recorded value
 # within a stated distance of the true gap: value_hi exceeds the true gap by at most
 # 2 (1 + gap) 1e-8 before the final rounding (num_hi ≤ num + 2(eP + eD) and den_lo ≥ den - 2eP),
-# and the rounding up adds at most a relative 2⁻⁵² of the value. The Float64 steps are: the exact
+# and the rounding up adds at most a relative 2⁻⁵² of the value when the Float64 result is a positive
+# normal number, and at most nextfloat(0.0) in absolute terms when it is subnormal. The Float64 steps are: the exact
 # conversion of the inputs, the validation of the scales in `bad_scale`, the report of P̂, D̂, θ̂, t
 # and the two verdict bounds (rounded up and down as stated).
 

@@ -170,13 +170,15 @@ with `ok`, and the harness verdict is the true one: if `value_hi ≤ target` the
 target, and if `target < value_lo` the true gap exceeds it (and so does `value_hi`). It does not pass
 through the shared `relative_gap`, whose rounding allowance and Float64 clamp would break this
 argument. It is also `uncertifiable` when `P_hi < D_lo`, when the dual point cannot be shown feasible,
-when `(eP + eD)/max(P_lo, floatmin) > 1e-8`, when `P` or `D` is not a normal Float64, and, for a column
+when `(eP + eD)/max(P_lo, floatmin) > 1e-8`, when a nonzero `P` or `D` would be reported as zero, a
+subnormal number or a non-finite number (a zero value is accepted), and, for a column
 that is not constant (positive scale), when its scale is not a normal Float64, is `0`, or is not above
 its error bound (a constant column has scale `0` and no error bound). The cap `1e-8` is not needed for
 the verdict, which the rule above settles; it keeps the recorded value within a stated distance of the
 true gap: `value_hi` exceeds the true gap by at most `2(1 + gap)·1e-8` before the final rounding (from
 `num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`), and the rounding up adds at most a relative
-`2⁻⁵²` of the value. The steps outside the BigFloat core are the exact input conversion, the
+`2⁻⁵²` of the value when the Float64 result is a positive normal number, and at most `nextfloat(0.0)` in
+absolute terms when it is subnormal. The steps outside the BigFloat core are the exact input conversion, the
 validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the two rounded
 bounds of the verdict. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
 problem, so `D` bounds it from below. A shift `δ` of `β₀` from the profiled optimum for the fixed `β`

@@ -228,10 +228,12 @@ end
   end
   # and the Float64 report, which adds its own rounding of P (this checks the report, not the bound)
   @test abs(BigFloat(a.P) - Pexact) <= a.eP + 8 * eps(Float64(Pexact)) && a.eP < 1e-60 && a.width < 1e-60
-  # a target between the bounds of the gap is uncertifiable, below it ok with a value at most the target,
-  # above it ok with a value above the target. The data are those of the review: three constant columns
-  # of ±C and a column (-1, 1) with β = (1, 1, 1, 0.9) and λ = 0.1, whose exact gap is set by the
-  # intercept β₀ = 0.5 + δ; the error bounds are about 1e-12 relative, since the fitted values cancel C
+  # a certificate is uncertifiable when the interval of the relative gap contains the target in the
+  # sense value_lo ≤ target < value_hi; it is ok when the true gap, or the whole interval, lies below
+  # the target (a value at most the target) or above it (a value above the target). The data are
+  # those of the review: three constant columns, C, 1 and -C, and a column (-1, 1), with
+  # β = (1, 1, 1, 0.9) and λ = 0.1, whose gap is set by the intercept β₀ = 0.5 + δ; the error
+  # bounds are about 1e-12 relative, since the fitted values cancel C
   C = 1e62
   Xt, yt, βt = [C 1.0 -C -1.0; C 1.0 -C 1.0], [0.5, 2.5], [1.0, 1.0, 1.0, 0.9]
   δof(g) = sqrt(0.19 * (g - 2e-12) / (1 - (g - 2e-12)))
