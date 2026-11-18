@@ -4,7 +4,9 @@
 [![CI](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
-The package has one estimator, the Gaussian lasso at a single penalty level:
+The package has the Gaussian lasso at a single penalty level, `lasso`, and the group lasso at a single
+penalty level, `group_lasso` (see the [documentation](https://mlakolar.github.io/HighDimensionalModels.jl/dev/group_lasso/)).
+The lasso is
 
 ```
 minimize over β:   ‖y - Xβ‖² / (2n) + λ ‖β‖₁ ,      n = size(X, 1).
@@ -65,9 +67,12 @@ optional `CDSolver` from ProximalSolvers (re-exported). Other argument types thr
 `ArgumentError`; nothing is converted. The other checks are those of ProximalBase and
 ProximalSolvers, and their errors are passed on.
 
+`group_lasso(X, y, λ, groups, solver = CDSolver())` takes the same types of `X`, `y`, `λ` and solver,
+and `groups`, a vector of vectors of column indices that partition the columns.
+
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
 cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and
-nonconvex penalties; generalized linear models; group, sparse-group and multitask regression;
+nonconvex penalties; generalized linear models; sparse-group and multitask regression;
 quantile regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient
 models; post-selection inference; integer, sparse and view designs.
 

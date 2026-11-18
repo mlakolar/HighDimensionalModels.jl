@@ -1,6 +1,6 @@
 # HighDimensionalModels.jl
 
-HighDimensionalModels has one estimator, the Gaussian lasso at a single penalty level:
+HighDimensionalModels has the Gaussian lasso at a single penalty level, `lasso`, and the group lasso at a single penalty level, `group_lasso` (see the [group lasso page](group_lasso.md)). The lasso is
 
 ```math
 \min_{\beta \in \mathbb{R}^p}\ \frac{1}{2n}\lVert y - X\beta\rVert_2^2 + \lambda \lVert \beta \rVert_1 .
@@ -37,7 +37,7 @@ check a fit independently.
 - Penalty paths, screening, continuation and cross-validation.
 - Weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and nonconvex
   penalties; generalized linear models.
-- Group, sparse-group and multitask regression; quantile regression; SLOPE and knockoffs;
+- Sparse-group and multitask regression; quantile regression; SLOPE and knockoffs;
   structured and fused penalties; low-rank and sparse-plus-low-rank models;
   varying-coefficient models; post-selection inference.
 - General coordinate-descent interfaces, the compatibility API of earlier versions, and
@@ -53,7 +53,8 @@ the tag `archive/pre-minimal-core/master`.
 HighDimensionalModels
 ```
 
-The docstrings of `lasso` and `LassoSolution` are on the [lasso page](lasso.md).
+The docstrings of `lasso` and `LassoSolution` are on the [lasso page](lasso.md), and those of `group_lasso` and
+`GroupLassoSolution` on the [group lasso page](group_lasso.md).
 `CDSolver` is that of ProximalSolvers, re-exported. `coef`, `predict`, `residuals` and `nobs` are
 those of [StatsAPI.jl](https://github.com/JuliaStats/StatsAPI.jl), with methods for
-`LassoSolution`.
+`LassoSolution` and `GroupLassoSolution`.

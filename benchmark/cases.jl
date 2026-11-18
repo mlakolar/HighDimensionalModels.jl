@@ -17,7 +17,7 @@ struct CaseSpec
   certify::Function
 end
 
-const CASE_GROUPS = ("lasso", "controls")
+const CASE_GROUPS = ("lasso", "group", "controls")
 # The negative controls run only when HDM_GROUPS names them.
 const DEFAULT_GROUPS = filter(!=("controls"), CASE_GROUPS)
 
@@ -175,10 +175,91 @@ function control_cases!(catalog)
     certify = (p, s, out) -> lasso_gap(s.X, s.y, coef(out), s.λ))
 end
 
+# ---- group lasso (#224) ----
+# The group lasso on the raw inputs of the scenario "groups-200x60" (twelve groups of five columns), with an
+# intercept and the default weights √|G|, at the level λ = 0.1 λmax. Certified at the stored intercept and
+# coefficients by `group_gap`, a duality gap on the full column span of each group.
+
+# The target of the group cases, which their certificate also needs to decide whether the rounding of its
+# bounds could change the verdict
+const GROUP_TARGET = 1e-6
+
+# The dot product of two vectors, added in order
+function ordered_dot(a, b)
+  s = 0.0
+  for i in eachindex(a, b)
+    s += a[i] * b[i]
+  end
+  s
+end
+
+# gᵀG⁻¹g for a symmetric positive definite G, by elimination in order (no BLAS)
+function ordered_quadratic(G, g)
+  A, b, value = copy(G), copy(g), 0.0
+  for i in eachindex(b)
+    value += b[i]^2 / A[i, i]
+    for j in i+1:length(b)
+      f = A[j, i] / A[i, i]
+      for l in i:length(b)
+        A[j, l] -= f * A[i, l]
+      end
+      b[j] -= f * b[i]
+    end
+  end
+  value
+end
+
+# The smallest λ with a zero group lasso solution, for weights above zero: maxₖ ‖P_Gₖ ỹ‖/(√n wₖ) with
+# `orthonormal`, P_G the projector on the span of the centred columns of the group, and maxₖ ‖X̃_Gₖ'ỹ‖/(n wₖ)
+# without. The sums and the elimination add in a fixed order, so that λ does not depend on the BLAS or the
+# Julia version.
+function group_lambda_max(X, y, groups, weights; orthonormal)
+  n = size(X, 1)
+  ỹ = y .- sample_mean(y)
+  top = 0.0
+  for (k, G) in enumerate(groups)
+    cols = [X[:, j] .- sample_mean(view(X, :, j)) for j in G]
+    g = [ordered_dot(c, ỹ) for c in cols]
+    v = orthonormal ? sqrt(ordered_quadratic([ordered_dot(a, b) for a in cols, b in cols], g)) / (sqrt(n) * weights[k]) :
+                      sqrt(ordered_dot(g, g)) / (n * weights[k])
+    top = max(top, v)
+  end
+  top
+end
+
+function group_cases!(catalog)
+  # λ = ratio λmax of the problem of the case, with the solver of fixed configuration; `orthonormal` selects
+  # standardize = :orthonormal or :none
+  function group_inputs(p; orthonormal, tol, ratio = 0.1)
+    X, y = case64(p.X), case64(p.y)
+    groups = grouped_groups(GROUPED_SHAPE.ngroups, GROUPED_SHAPE.size)
+    weights = sqrt.(Float64.(length.(groups)))
+    λ = ratio * group_lambda_max(X, y, groups, weights; orthonormal)
+    solver = CDSolver(; tol, rng = solver_rng())
+    (; X, y, groups, weights, λ, solver, orthonormal, levels = [λ])
+  end
+  group_call(s) = group_lasso(s.X, s.y, s.λ, s.groups, s.solver; intercept = true,
+                              standardize = s.orthonormal ? :orthonormal : :none)
+  group_certificate(s, out) = group_gap(s.X, s.y, out.intercept, out.coefficients, s.λ, s.groups, s.weights;
+                                        orthonormal = s.orthonormal, target = GROUP_TARGET)
+  # The tolerance of the solver is explicit. In a pilot on repetitions 1 to 10 (Julia 1.13.4) the stopping
+  # tolerance 1e-7 left relative gaps of at most 6e-8 with orthonormalization; without it 1e-7 left up to 7e-7
+  # (about 3 times the tolerance) and 1e-8 left at most 7e-8.
+  add_case!(catalog, "group", "group_lasso", "orthonormal"; scenario = "groups-200x60",
+    measure = MEASURE.gap, target = GROUP_TARGET,
+    build = p -> group_inputs(p; orthonormal = true, tol = 1e-7), call = group_call,
+    certify = (p, s, out) -> group_certificate(s, out))
+  add_case!(catalog, "group", "group_lasso", "none"; scenario = "groups-200x60", suite = "extended",
+    measure = MEASURE.gap, target = GROUP_TARGET,
+    build = p -> group_inputs(p; orthonormal = false, tol = 1e-8), call = group_call,
+    certify = (p, s, out) -> group_certificate(s, out))
+end
+
 function all_cases()
   catalog = CaseSpec[]
   lasso_cases!(catalog)
   control_cases!(catalog)
+  group_cases!(catalog)
   ids = [c.meta.id for c in catalog]
   allunique(ids) || error("duplicate case ids")
   unknown = setdiff(unique(c.meta.scenario for c in catalog), SCENARIOS)

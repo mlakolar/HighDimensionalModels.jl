@@ -364,3 +364,189 @@ function lasso_gap(X, y, β, λ)
   a.kkt === nothing || return relative_residual(a.kkt, a.g0, :kkt_residual)
   relative_gap(a.P, a.D; a.scale, a.terms)
 end
+
+# ---- group lasso (#224) ----
+#
+# Certificate of `group_lasso` (intercept = true), at the returned intercept β₀ and coefficients β. The
+# objective, with X̃ the columns of X centred at their exact means (a column whose entries are all equal
+# has that value as its mean in exact arithmetic too, so it centres to zeros) and the weights wₖ of the
+# fit (positive), is
+#
+#   P = ‖y - β₀1 - Xβ‖²/(2n) + λ Σₖ wₖ ‖X̃_Gₖ β_Gₖ‖/√n      (orthonormal = true)
+#   P = ‖y - β₀1 - Xβ‖²/(2n) + λ Σₖ wₖ ‖β_Gₖ‖               (orthonormal = false).
+#
+# The dual point is u = t r_c with r_c = r - r̄1 the centred residual of r = y - β₀1 - Xβ, and θ = u/n. For
+# any θ that sums to 0, ‖r‖²/(2n) ≥ θ'r - n‖θ‖²/2, and θ'r = ỹ'θ - Σₖ θ'X̃_Gₖ β_Gₖ with ỹ = y - ȳ1 (θ sums to 0),
+# so that P(β₀, β) ≥ D = ỹ'θ - n‖θ‖²/2 = t ỹ'r_c/n - t² ‖r_c‖²/(2n) whenever |θ'X̃_G β_G| ≤ λ w ‖X̃_G β_G‖/√n
+# (orthonormal) or ≤ λ w ‖β_G‖ (not) for every group, which holds for every β_G if
+#
+#   orthonormal:  ‖P_G u‖ ≤ √n λ w,  P_G the projector on the FULL column span of X̃_G,
+#                 that is u'X̃_G (X̃_G'X̃_G)⁻¹ X̃_G'u ≤ n λ² w²;
+#   not:          ‖X̃_G'u‖/n ≤ λ w.
+#
+# Since D is below the minimum over β₀ and β, P - D bounds P - P*, and a point with a larger P than the
+# minimum has D below it too. The projector is built from all the columns of the group, never from a
+# truncated set of directions (which can underestimate ‖P_G u‖ and make u infeasible): when the Gram matrix
+# of X̃_G is not positive definite in exact arithmetic the certificate is `uncertifiable`.
+#
+# Arithmetic. Every stored Float64 input is converted exactly to a rational number (BigInt numerator and
+# denominator), and r, r̄, r_c, the centred columns, the Gram matrices, X̃_G'u and the quantities that
+# enter P and D (except the square roots) are computed exactly: there is no rounding to bound, unlike the
+# error model of `lasso_standardized_parts`. The factor t is a rational number (a 256-bit BigFloat, exact as
+# a rational) with t² ≤ min over the groups of nλ²w²/(u₁'X̃_G(X̃_G'X̃_G)⁻¹X̃_G'u₁) (orthonormal) or
+# n²λ²w²/‖X̃_G'u₁‖² (not), u₁ = r_c, and t ≤ 1, so that the dual point is feasible in exact arithmetic; the
+# condition is checked exactly. The square roots of the penalty are bracketed by 256-bit BigFloat bounds
+# computed with directed rounding (operands nonnegative), and D is converted to BigFloat with directed
+# rounding. So P_lo ≤ P ≤ P_hi and D_lo ≤ D ≤ D_hi hold in exact arithmetic, and
+# value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin) and value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin)
+# (the first computed rounding up and the second rounding down, then converted to Float64 in the same
+# direction) satisfy value_lo ≤ the relative gap max(P - D, 0)/max(P, floatmin) ≤ value_hi. As in
+# `lasso_gap_standardized`, the certificate is `uncertifiable` when value_lo ≤ target < value_hi, and
+# otherwise returns value_hi, so that the verdict of the harness is the true one.
+#
+# Not a gap. With λ = 0 or a weight of zero there is no such dual point; the certificate refuses these
+# problems as `uncertifiable`, and a KKT residual is not reported in its place.
+
+# the exact rational numbers of the certificate
+const GroupRational = Rational{BigInt}
+
+# A 256-bit BigFloat bound of the rational q: the numerator and the denominator are converted exactly
+# (at a precision above their bit lengths) and the quotient is rounded in the direction `mode`
+# (RoundDown: at most q; RoundUp: at least q)
+function rational_bound(q::GroupRational, mode)
+  bits = max(ndigits(abs(numerator(q)); base = 2), ndigits(denominator(q); base = 2), 256) + 2
+  num, den = setprecision(() -> (BigFloat(numerator(q)), BigFloat(denominator(q))), BigFloat, bits)
+  setprecision(BigFloat, 256) do
+    setrounding(() -> num / den, BigFloat, mode)
+  end
+end
+
+# gᵀG⁻¹g, exactly, for a symmetric matrix G and a vector g of rational numbers, by elimination (LDLᵀ); nothing
+# if a pivot is not positive, that is if G is not positive definite
+function posdef_quadratic(G::AbstractMatrix{GroupRational}, g::AbstractVector{GroupRational})
+  m = length(g)
+  A, b = copy(G), copy(g)
+  value = zero(GroupRational)
+  for i in 1:m
+    pivot = A[i, i]
+    pivot > 0 || return nothing
+    value += b[i]^2 / pivot
+    for j in i+1:m
+      f = A[j, i] / pivot
+      iszero(f) && continue
+      for l in i:m
+        A[j, l] -= f * A[i, l]
+      end
+      b[j] -= f * b[i]
+    end
+  end
+  value
+end
+
+# A rational t ≥ 0 with t² ≤ x (a rational x ≥ 0), close to √x: the square root of a 256-bit lower bound of x,
+# rounded down, lowered until the inequality holds exactly
+function rational_sqrt_below(x::GroupRational)
+  x == 1 && return one(GroupRational)
+  b = setprecision(BigFloat, 256) do
+    setrounding(() -> sqrt(rational_bound(x, RoundDown)), BigFloat, RoundDown)
+  end
+  t = GroupRational(b)
+  while t^2 > x
+    b = prevfloat(b)
+    t = GroupRational(b)
+  end
+  t
+end
+
+# The reason why the groups, the weights and λ do not define a group lasso with a gap, or nothing
+function group_problem(groups, weights, λ, p::Integer)
+  groups isa AbstractVector || return "the groups must be a vector of vectors of column indices"
+  seen = falses(p)
+  for G in groups
+    (G isa AbstractVector && !isempty(G)) || return "the groups must be nonempty vectors of column indices"
+    for j in G
+      (j isa Integer && 1 <= j <= p && !seen[j]) || return "the groups must be disjoint and contain only columns of X"
+      seen[j] = true
+    end
+  end
+  all(seen) || return "the groups must contain every column of X"
+  (length(weights) == length(groups) && cert_finite(λ, weights) && all(>=(0), weights) && λ >= 0) ||
+    return "λ and the group weights must be finite and nonnegative, with one weight per group"
+  (λ > 0 && all(>(0), weights)) ||
+    return "λ and the group weights must be positive: with λ = 0 or a weight of zero there is no dual point of the form used here, and a KKT residual is not a duality gap"
+  nothing
+end
+
+# The primal and dual values of the certificate at (β₀, β), as described above: a String with the reason
+# if there is none, otherwise (; P, D, t, u, gap, gap_lo, P_lo, P_hi, D_lo, D_hi), with P and D Float64
+# (P rounded from the middle of its bounds), u = t r_c as Float64, and the bounds in BigFloat.
+function group_parts(X, y, β₀, β, λ, groups, weights; orthonormal::Bool)
+  d = cert_regression(X, y, β)
+  d isa String && return d
+  cert_finite(β₀) || return "nonfinite intercept"
+  (; X, y, β, n, p) = d
+  reason = group_problem(groups, weights, λ, p)
+  reason === nothing || return reason
+  Q = GroupRational
+  Xq, yq, βq = Q.(X), Q.(y), Q.(β)
+  λq, wq = Q(f64(λ)), Q.(f64(weights))
+  r = yq .- Q(f64(β₀)) .- Xq * βq
+  rc = r .- sum(r) / n                                  # sums to 0
+  ỹ = yq .- sum(yq) / n
+  K = length(groups)
+  q = Vector{Q}(undef, K)                               # the argument of the square root of the penalty of group k
+  t_sq = one(Q)
+  for (k, G) in enumerate(groups)
+    A, bG = Xq[:, G], βq[G]
+    g = transpose(A) * rc                               # X̃_G'r_c, since r_c sums to 0
+    if orthonormal
+      Ac = A .- sum(A; dims = 1) ./ n
+      q[k] = sum(abs2, Ac * bG) / n
+      s = posdef_quadratic(transpose(Ac) * Ac, g)
+      s === nothing && return "the centred columns of group $k are linearly dependent in exact arithmetic: the projector on their span is not built from them"
+      cap = n * (λq * wq[k])^2
+    else
+      q[k] = sum(abs2, bG)
+      s = sum(abs2, g)
+      cap = Q(n)^2 * (λq * wq[k])^2
+    end
+    s > 0 && (t_sq = min(t_sq, cap / s))
+  end
+  t = rational_sqrt_below(t_sq)
+  D = t * sum(ỹ .* rc) / n - t^2 * sum(abs2, rc) / (2n)
+  quad = sum(abs2, r) / (2n)
+  lw = λq .* wq
+  P_lo, P_hi = map((RoundDown, RoundUp)) do mode
+    setprecision(BigFloat, 256) do
+      setrounding(BigFloat, mode) do
+        acc = rational_bound(quad, mode)
+        for k in 1:K
+          acc += rational_bound(lw[k], mode) * sqrt(rational_bound(q[k], mode))
+        end
+        acc
+      end
+    end
+  end
+  D_lo, D_hi = rational_bound(D, RoundDown), rational_bound(D, RoundUp)
+  P_hi < D_lo && return "the bounds contradict weak duality: P_hi = $(Float64(P_hi)) < D_lo = $(Float64(D_lo))"
+  floor_ = BigFloat(floatmin(Float64))
+  gap, gap_lo = setprecision(BigFloat, 256) do
+    num_hi = setrounding(() -> max(P_hi - D_lo, zero(BigFloat)), BigFloat, RoundUp)
+    gap = setrounding(() -> Float64(num_hi / max(P_lo, floor_), RoundUp), BigFloat, RoundUp)
+    num_lo = setrounding(() -> max(P_lo - D_hi, zero(BigFloat)), BigFloat, RoundDown)
+    gap_lo = setrounding(() -> Float64(num_lo / max(P_hi, floor_), RoundDown), BigFloat, RoundDown)
+    gap, gap_lo
+  end
+  isfinite(gap) || return "the upper bound of the relative gap is not finite"
+  (; P = Float64((P_lo + P_hi) / 2), D = Float64((D_lo + D_hi) / 2), t = Float64(t), u = Float64.(t .* rc),
+     gap, gap_lo, P_lo, P_hi, D_lo, D_hi)
+end
+
+function group_gap(X, y, β₀, β, λ, groups, weights; orthonormal::Bool, target::Float64)
+  isfinite(target) && target > 0 || return uncertifiable("the target must be finite and positive")
+  a = group_parts(X, y, β₀, β, λ, groups, weights; orthonormal)
+  a isa String && return uncertifiable(a)
+  a.gap_lo <= target < a.gap && return uncertifiable(
+    "the rounding of the bounds could change the verdict: the relative gap is in [$(a.gap_lo), $(a.gap)] and the target is $target")
+  cert_ok(a.gap, :relative_gap; note = "upper bound; exact rational arithmetic for the data, the dual point and the quadratic forms")
+end

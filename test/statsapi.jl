@@ -16,7 +16,7 @@ solver(T) = CDSolver(order = :cyclic, momentum = false, tol = T === Float32 ? 1e
 
   @testset "exports" begin
     @test Set(names(HighDimensionalModels)) ==
-          Set([:HighDimensionalModels, :lasso, :LassoSolution, :CDSolver, :coef, :predict, :residuals, :nobs, :dof, :deviance])
+          Set([:HighDimensionalModels, :lasso, :LassoSolution, :group_lasso, :GroupLassoSolution, :CDSolver, :coef, :predict, :residuals, :nobs, :dof, :deviance])
     # the six methods are those of StatsAPI, and CDSolver is the one of ProximalSolvers
     for f in (coef, predict, residuals, nobs, dof, deviance)
       @test nameof(parentmodule(f)) === :StatsAPI

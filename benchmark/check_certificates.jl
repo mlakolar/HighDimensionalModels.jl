@@ -376,3 +376,302 @@ if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTI
     end
   end
 end
+
+# ---- group lasso (#224) ----
+# Controls of `group_gap`: closed-form values, a designed optimum, designed nonoptimal points, weak
+# duality and dual feasibility at random points, zero solutions at λ ≥ λmax, a nearly collinear group
+# (full column span), rank-deficient groups and problems that are not a gap (λ = 0, a weight of zero),
+# nonfinite inputs, and the exact bounds. The last testset needs HighDimensionalModels.
+
+# a group lasso with intercept whose solution (β₀, β) is known by construction: the centred columns X̃ (their
+# Float64 means), the gradient X̃_G'θ = v_G of a dual point θ (in the range of X̃, so that it sums to zero up to
+# rounding) and y = β₀ + Xβ + nθ, so the residual is nθ. With orthonormal, v_G = X̃_G'τ_G for a τ_G in the span
+# of X̃_G of norm λ w/√n along X̃_Gβ_G (active groups) or a fraction of it (inactive groups); without, v_G = λ w
+# β_G/‖β_G‖ (active) or a fraction of λ w along a random direction (inactive). The optimality conditions hold
+# in β₀ and β up to rounding.
+function designed_group(rng, orthonormal::Bool; n = 60, groups = [[1, 2], [3, 4, 5], [6, 7], [8, 9, 10]],
+                        active = (1, 3), λ = 0.1, β₀ = 1.5)
+  p = maximum(maximum, groups)
+  X = randn(rng, n, p) .* transpose(0.5 .+ rand(rng, p)) .+ transpose(randn(rng, p))
+  w = sqrt.(Float64.(length.(groups)))
+  Xc = X .- sum(X; dims = 1) ./ n
+  β, v = zeros(p), zeros(p)
+  for (k, G) in enumerate(groups)
+    A, z, share = Xc[:, G], randn(rng, length(G)), k in active ? 1.0 : 0.5
+    k in active && (β[G] = z)
+    if orthonormal
+      c = A * z
+      v[G] = A' * ((share * λ * w[k] / sqrt(n)) .* c ./ norm(c))
+    else
+      v[G] = share * λ * w[k] .* z ./ norm(z)
+    end
+  end
+  θ = dual_with(Xc, v)
+  (; X, y = β₀ .+ X * β .+ n .* θ, β, β₀, λ, θ, groups, w, Xc)
+end
+
+# λmax of the group lasso with positive weights, from Float64 centred data (an independent form: the projector
+# by a QR, as in the earlier harness): maxₖ ‖P_Gₖ ỹ‖/(√n wₖ) with orthonormal, maxₖ ‖X̃_Gₖ'ỹ‖/(n wₖ) without
+function control_group_lambda_max(X, y, groups, w, orthonormal)
+  n = size(X, 1)
+  Xc, ỹ = X .- sum(X; dims = 1) ./ n, y .- sum(y) / n
+  maximum(enumerate(groups)) do (k, G)
+    orthonormal ? norm(Matrix(qr(Xc[:, G]).Q)' * ỹ) / (sqrt(n) * w[k]) : norm(Xc[:, G]' * ỹ) / (n * w[k])
+  end
+end
+
+# the feasibility of the dual point u of `group_parts`, from Float64 data (an independent form, to a relative 1e-12)
+function group_feasible(d, a, orthonormal)
+  n = size(d.X, 1)
+  all(enumerate(d.groups)) do (k, G)
+    A = d.Xc[:, G]
+    orthonormal ? norm(Matrix(qr(A).Q)' * a.u) <= sqrt(n) * d.λ * d.w[k] * (1 + 1e-12) :
+                  norm(A' * a.u) / n <= d.λ * d.w[k] * (1 + 1e-12)
+  end
+end
+
+@testset "Group lasso certificate: exact arithmetic" begin
+  rng = scenario_rng("certificate-controls-group", 1)
+  # the directed bounds of a rational number enclose it, tightly
+  for q in (big"1" // 3, big"-7" // 11, big"22" // 7 * big"10"^50, big"1" // big"10"^40, big"0" // 1)
+    lo, hi = rational_bound(q, RoundDown), rational_bound(q, RoundUp)
+    @test GroupRational(lo) <= q <= GroupRational(hi)
+    @test iszero(q) || (hi - lo) <= abs(hi) * 2.0^-250
+  end
+  # g'G⁻¹g by elimination, against the solution of the linear system in rational arithmetic
+  Q = GroupRational
+  M = Q.(rand(rng, -5:5, 4, 4)); G = transpose(M) * M + 3I
+  g = Q.(rand(rng, -5:5, 4))
+  @test posdef_quadratic(G, g) == dot(g, G \ g)
+  @test posdef_quadratic(Q[1 2; 2 4], Q[1, 1]) === nothing            # singular
+  @test posdef_quadratic(Q[1 2; 2 1], Q[1, 1]) === nothing            # indefinite
+  # t with t² ≤ x, close to √x
+  for x in (Q(1), Q(1) // 64, Q(1) // 32, Q(2) // 3, Q(1) // big"10"^30)
+    t = rational_sqrt_below(x)
+    @test t^2 <= x && abs(Float64(t) - sqrt(Float64(x))) <= 1e-12 * sqrt(Float64(x))
+  end
+  @test rational_sqrt_below(Q(1) // 64) == Q(1) // 8
+end
+
+@testset "Group lasso certificate: closed forms" begin
+  # two orthogonal centred columns, n = 4, one group of weight 1, y = 10 + (1, -1, 7, -7), λ = 5/8: the
+  # fitted contribution of the group is (1 - √n λ w/‖P_G ỹ‖) P_G ỹ = (7/8) ỹ, β = (7/8)(1, 7) (exact binary
+  # numbers), P = 0.1953125 + 0.625·4.375 = 2.9296875 = D at the optimum, with t = 1
+  X = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
+  y = [11.0, 9.0, 17.0, 3.0]
+  β = [0.875, 6.125]
+  c = group_gap(X, y, 10.0, β, 0.625, [[1, 2]], [1.0]; orthonormal = true, target = 1e-6)
+  @test ok(c) && c.measure === :relative_gap && c.value == 0
+  a = group_parts(X, y, 10.0, β, 0.625, [[1, 2]], [1.0]; orthonormal = true)
+  @test a.P == 2.9296875 && a.D == 2.9296875 && a.t == 1 && a.gap == 0 && a.gap_lo == 0
+  # β = 0: P = ‖ỹ‖²/(2n) = 12.5, t = 1/8 (t² ‖P_G ỹ‖² = nλ²w²), D = t‖ỹ‖²/n - t²‖ỹ‖²/(2n) = 2.9296875, the
+  # relative gap 49/64
+  c = group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = true, target = 1e-6)
+  @test ok(c) && c.value == 0.765625
+  a = group_parts(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = true)
+  @test a.P == 12.5 && a.D == 2.9296875 && a.t == 0.125
+  # without orthonormalization (the columns have ‖x‖² = 2): at β = 0, g = X̃'ỹ = (2, 14), t² = n²λ²w²/‖g‖² = 1/32,
+  # D = t‖ỹ‖²/n - t²‖ỹ‖²/(2n) = 25 t - 12.5 t² with t = 1/(4√2)
+  t = 1 / (4 * sqrt(2.0))
+  a = group_parts(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false)
+  @test a.P == 12.5
+  @test a.t ≈ t rtol = 1e-14
+  @test a.D ≈ 25t - 12.5t^2 rtol = 1e-14
+  c = group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false, target = 1e-6)
+  @test ok(c)
+  @test c.value ≈ (12.5 - (25t - 12.5t^2)) / 12.5 rtol = 1e-14
+  # the exact gap here is irrational, so its bounds are two adjacent Float64 numbers: a target equal to the lower
+  # one cannot be decided (uncertifiable), a target above the upper one is met and one below the lower one is missed
+  @test a.gap_lo < a.gap && a.gap == nextfloat(a.gap_lo)
+  c = group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false, target = a.gap_lo)
+  @test bad(c) && occursin("could change the verdict", c.note)
+  @test group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false, target = a.gap).value == a.gap
+  c = group_gap(X, y, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = false, target = prevfloat(a.gap_lo))
+  @test ok(c) && c.value == a.gap && c.value > prevfloat(a.gap_lo)
+end
+
+@testset "Group lasso certificate: designed optimum, nonoptimal points, weak duality" begin
+  rng = scenario_rng("certificate-controls-group", 2)
+  for orthonormal in (true, false)
+    d = designed_group(rng, orthonormal)
+    n = size(d.X, 1)
+    # the optimum: the gap, the dual point and its feasibility
+    c = group_gap(d.X, d.y, d.β₀, d.β, d.λ, d.groups, d.w; orthonormal, target = 1e-6)
+    @test ok(c) && c.measure === :relative_gap && c.value <= TIGHT
+    a = group_parts(d.X, d.y, d.β₀, d.β, d.λ, d.groups, d.w; orthonormal)
+    @test a.u ≈ n .* d.θ atol = 1e-10
+    @test a.t ≈ 1 atol = 1e-12
+    @test group_feasible(d, a, orthonormal)
+    # the primal value is the objective in the original coordinates
+    r = d.y .- d.β₀ .- d.X * d.β
+    pen = sum(d.w[k] * (orthonormal ? norm(d.Xc[:, G] * d.β[G]) / sqrt(n) : norm(d.β[G])) for (k, G) in enumerate(d.groups))
+    @test a.P ≈ dot(r, r) / (2n) + d.λ * pen rtol = 1e-12
+    # weak duality and dual feasibility at random points: the bounds at these points are below the known optimum
+    for _ in 1:5
+      β = d.β .+ 0.3 .* randn(rng, length(d.β))
+      β₀ = d.β₀ + 0.3 * randn(rng)
+      b = group_parts(d.X, d.y, β₀, β, d.λ, d.groups, d.w; orthonormal)
+      @test ok(group_gap(d.X, d.y, β₀, β, d.λ, d.groups, d.w; orthonormal, target = 1e-6))
+      @test group_feasible(d, b, orthonormal)
+      @test b.D <= b.P && b.D <= a.P + 1e-13 && b.gap_lo <= b.gap
+    end
+    # points that are not optimal miss a gap target of 1e-6, in either direction
+    for scale in (0.5, 1.5)
+      @test group_gap(d.X, d.y, d.β₀, scale .* d.β, d.λ, d.groups, d.w; orthonormal, target = 1e-6).value > 1e-6
+    end
+    for δ in (1e-2, -1e-2)
+      @test group_gap(d.X, d.y, d.β₀ + δ, d.β, d.λ, d.groups, d.w; orthonormal, target = 1e-6).value > 1e-6
+    end
+    β = copy(d.β); β[1] += 1e-3
+    @test group_gap(d.X, d.y, d.β₀, β, d.λ, d.groups, d.w; orthonormal, target = 1e-6).value > 1e-6
+    # the gap is zero at a solution up to the target scale: a perturbation of 1e-9 stays below it
+    β = copy(d.β); β[1] += 1e-9
+    @test group_gap(d.X, d.y, d.β₀, β, d.λ, d.groups, d.w; orthonormal, target = 1e-6).value <= 1e-6
+  end
+end
+
+@testset "Group lasso certificate: zero solutions at λ ≥ λmax" begin
+  rng = scenario_rng("certificate-controls-group", 3)
+  for orthonormal in (true, false)
+    d = designed_group(rng, orthonormal)
+    n = size(d.X, 1)
+    top = control_group_lambda_max(d.X, d.y, d.groups, d.w, orthonormal)
+    ȳ = sum(d.y) / n
+    for factor in (1 + 1e-9, 2.0)
+      @test group_gap(d.X, d.y, ȳ, zeros(size(d.X, 2)), factor * top, d.groups, d.w; orthonormal, target = 1e-6).value <= TIGHT
+    end
+    @test group_gap(d.X, d.y, ȳ, zeros(size(d.X, 2)), 0.9top, d.groups, d.w; orthonormal, target = 1e-6).value > 1e-4
+  end
+end
+
+@testset "Group lasso certificate: the full column span of a nearly collinear group" begin
+  rng = scenario_rng("certificate-controls-group", 4)
+  n = 40
+  # x₂ = x₁ + 2⁻⁴⁰ z: the centred columns have full column rank, with a condition number about 1e12; the
+  # projector on their span is not that on a truncated set of directions
+  x1, z = randn(rng, n), randn(rng, n)
+  X = [x1 x1 .+ 2.0^-40 .* z randn(rng, n, 2)]
+  groups, w = [[1, 2], [3, 4]], [sqrt(2.0), sqrt(2.0)]
+  y = 1.0 .+ X[:, 1] .+ 0.5 .* randn(rng, n)
+  λ = 0.05
+  @test cond(X[:, 1:2] .- sum(X[:, 1:2]; dims = 1) ./ n) > 1e10
+  β = [0.4, 0.3, 0.0, 0.0]
+  c = group_gap(X, y, sum(y) / n - sum(sum(X; dims = 1) ./ n .* β'), β, λ, groups, w; orthonormal = true, target = 1e-6)
+  @test ok(c)
+  a = group_parts(X, y, sum(y) / n - dot(vec(sum(X; dims = 1) ./ n), β), β, λ, groups, w; orthonormal = true)
+  # the largest factor t ≤ 1 for which the dual point is feasible, from the normal equations of the full span in
+  # 512-bit BigFloat: the certificate's t is not above it (to the rounding of t to Float64)
+  tfull = setprecision(BigFloat, 512) do
+    Xb, yb, βb = BigFloat.(X), BigFloat.(y), BigFloat.(β)
+    r = yb .- (sum(yb) / n - sum((sum(Xb; dims = 1) ./ n) .* transpose(βb))) .- Xb * βb
+    rc = r .- sum(r) / n
+    top = BigFloat(1)
+    for (k, G) in enumerate(groups)
+      Ac = Xb[:, G] .- sum(Xb[:, G]; dims = 1) ./ n
+      s = dot(rc, Ac * ((transpose(Ac) * Ac) \ (transpose(Ac) * rc)))
+      s > 0 && (top = min(top, sqrt(n * BigFloat(λ)^2 * BigFloat(w[k])^2 / s)))
+    end
+    Float64(top)
+  end
+  @test tfull < 1                                           # the constraint is active
+  @test a.t <= tfull * (1 + 1e-12) && a.t >= tfull * (1 - 1e-9)
+end
+
+@testset "Group lasso certificate: refusals" begin
+  rng = scenario_rng("certificate-controls-group", 5)
+  n = 20
+  X, y = randn(rng, n, 4), randn(rng, n)
+  groups, w, β = [[1, 2], [3, 4]], [1.0, 1.0], zeros(4)
+  base = group_gap(X, y, sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 1e-6)
+  @test ok(base)
+  # a group of linearly dependent columns (exactly, in rational arithmetic): no projector of the full span
+  Xd = Float64[1 0 1 2; 0 1 1 0; 1 1 2 1; 2 1 3 3; 0 2 2 0; 1 0 1 0]
+  c = group_gap(Xd, [1.0, 2, 3, 4, 5, 7], 3.5, zeros(4), 0.05, [[1, 2, 3], [4]], [1.0, 1.0]; orthonormal = true, target = 1e-6)
+  @test bad(c) && occursin("linearly dependent", c.note)
+  # the same groups without orthonormalization have a certificate (no projector is needed)
+  @test ok(group_gap(Xd, [1.0, 2, 3, 4, 5, 7], 3.5, zeros(4), 0.05, [[1, 2, 3], [4]], [1.0, 1.0]; orthonormal = false, target = 1e-6))
+  # λ = 0 and a weight of zero are not a gap: refused, and no KKT residual is reported instead
+  for (λ, ww) in ((0.0, w), (0.05, [0.0, 1.0]))
+    c = group_gap(X, y, sum(y) / n, β, λ, groups, ww; orthonormal = true, target = 1e-6)
+    @test bad(c) && c.measure === :relative_gap && occursin("not a duality gap", c.note)
+  end
+  # invalid and nonfinite inputs
+  @test bad(group_gap(X, y, sum(y) / n, β, -0.05, groups, w; orthonormal = true, target = 1e-6))
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, groups, [1.0], ; orthonormal = true, target = 1e-6))
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, [[1, 2], [2, 3, 4]], w; orthonormal = true, target = 1e-6))   # overlap
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, [[1, 2], [3]], w; orthonormal = true, target = 1e-6))          # a column in no group
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, [[1, 2], Int[], [3, 4]], [1.0, 1.0, 1.0]; orthonormal = true, target = 1e-6))
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, [[1, 2], [3, 5]], w; orthonormal = true, target = 1e-6))
+  @test bad(group_gap(X, y[1:end-1], sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 1e-6))
+  @test bad(group_gap(X, y, sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 0.0))
+  for v in (NaN, Inf)
+    @test bad(group_gap(X, y, v, β, 0.05, groups, w; orthonormal = true, target = 1e-6))
+    @test bad(group_gap(X, y, sum(y) / n, [v, 0, 0, 0], 0.05, groups, w; orthonormal = true, target = 1e-6))
+    @test bad(group_gap(X, y, sum(y) / n, β, v, groups, w; orthonormal = true, target = 1e-6))
+    @test bad(group_gap(X, y, sum(y) / n, β, 0.05, groups, [v, 1.0]; orthonormal = true, target = 1e-6))
+    Xv = copy(X); Xv[3, 2] = v
+    @test bad(group_gap(Xv, y, sum(y) / n, β, 0.05, groups, w; orthonormal = true, target = 1e-6))
+  end
+  # the value is an upper bound of the exact relative gap, which is here the rational number 49/64, a Float64
+  Xa = [1.0 0.0; -1.0 0.0; 0.0 1.0; 0.0 -1.0]
+  ya = [11.0, 9.0, 17.0, 3.0]
+  for target in (0.5, 0.9, 0.765625)
+    c = group_gap(Xa, ya, 10.0, zeros(2), 0.625, [[1, 2]], [1.0]; orthonormal = true, target)
+    @test ok(c) && c.value == 0.765625
+  end
+  # a gap that is exactly zero is certified at any target
+  @test group_gap(Xa, ya, 10.0, [0.875, 6.125], 0.625, [[1, 2]], [1.0]; orthonormal = true, target = 1e-300).value == 0
+end
+
+@testset "Group lasso scenario" begin
+  a, b = scenario("groups-200x60", 1), scenario("groups-200x60", 1)
+  groups = grouped_groups(GROUPED_SHAPE.ngroups, GROUPED_SHAPE.size)
+  @test size(a.X) == (200, 60) && length(a.y) == 200 && length(a.truth) == 60
+  @test length(groups) == 12 && all(==(5), length.(groups)) && sort(reduce(vcat, groups)) == 1:60
+  @test count(!iszero, a.truth) == 9 && count(g -> any(!iszero, a.truth[g]), groups) == 3
+  @test data_hash(a) == data_hash(b) && data_hash(a) != data_hash(scenario("groups-200x60", 2))
+  # the columns of a group are correlated, those of different groups are not (to the sampling error of 200 rows)
+  C = cor(a.X)
+  @test minimum(C[1, 2:5]) > 0.2 && maximum(abs, C[1, 6:60]) < 0.4
+end
+
+if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTIFICATES_PACKAGE", "1") != "0"
+  using HighDimensionalModels
+  isdefined(@__MODULE__, :build_catalog) || include(joinpath(@__DIR__, "cases.jl"))
+  @testset "Secondary agreement with HighDimensionalModels: the group lasso" begin
+    # the λmax of the cases (fixed-order arithmetic) agrees with the independent form
+    p = scenario("groups-200x60", 1)
+    groups = grouped_groups(GROUPED_SHAPE.ngroups, GROUPED_SHAPE.size)
+    w = sqrt.(Float64.(length.(groups)))
+    for orthonormal in (true, false)
+      @test group_lambda_max(p.X, p.y, groups, w; orthonormal) ≈ control_group_lambda_max(p.X, p.y, groups, w, orthonormal) rtol = 1e-12
+    end
+    # a cyclic fit to a tight tolerance has a gap far below the target of the cases
+    for (orthonormal, std) in ((true, :orthonormal), (false, :none))
+      λ = 0.1 * group_lambda_max(p.X, p.y, groups, w; orthonormal)
+      fit = group_lasso(p.X, p.y, λ, groups, CDSolver(order = :cyclic, tol = 1e-12); standardize = std)
+      c = group_gap(p.X, p.y, fit.intercept, fit.coefficients, λ, groups, w; orthonormal, target = GROUP_TARGET)
+      @test ok(c) && c.value <= 1e-9
+      # the primal value of the certificate is the objective of the fit, from the solver's own minimum
+      a = group_parts(p.X, p.y, fit.intercept, fit.coefficients, λ, groups, w; orthonormal)
+      @test a.P ≈ fit.result.minimum rtol = 1e-10
+      # the zero solution above λmax
+      zero_fit = group_lasso(p.X, p.y, 1.001 * group_lambda_max(p.X, p.y, groups, w; orthonormal) * (orthonormal ? 1 : 1), groups, CDSolver(order = :cyclic); standardize = std)
+      @test iszero(zero_fit.coefficients)
+    end
+    # the cases: the quick one meets its target, and the extended one too
+    catalog = build_catalog("extended", ["group"])
+    @test [c.meta.id for c in catalog] == ["group/group_lasso/none", "group/group_lasso/orthonormal"]
+    @test [c.meta.suite for c in catalog] == ["extended", "quick"] && all(c -> c.meta.target == GROUP_TARGET, catalog)
+    for spec in catalog
+      problem = scenario(spec.meta.scenario, 1)
+      prepared = spec.build(problem)
+      cert = spec.certify(problem, prepared, spec.call(deepcopy(prepared)))
+      @test ok(cert) && string(cert.measure) == spec.meta.measure && cert.value <= spec.meta.target
+      # a reproducible run: equal coefficients and intercepts from two fresh copies of the prepared inputs
+      a, b = spec.call(deepcopy(prepared)), spec.call(deepcopy(prepared))
+      @test coef(a) == coef(b)
+    end
+    @test [c.meta.id for c in build_catalog("quick", ["group"])] == ["group/group_lasso/orthonormal"]
+  end
+end

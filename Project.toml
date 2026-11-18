@@ -4,6 +4,7 @@ authors = ["Mladen Kolar <mkolar@chicagobooth.edu>"]
 version = "0.2.0-DEV"
 
 [deps]
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ProximalBase = "0a755509-c5b1-5d6f-9b24-59bcda3c37a3"
 ProximalSolvers = "fc4971f5-6616-4709-9bfc-89a819252f6b"
 StatsAPI = "82ae8749-77ed-4fe6-ae5f-f523153014b0"
@@ -22,11 +23,10 @@ julia = "1.10.8"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
-LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ParallelTestRunner = "d3525ed8-44d0-4b2c-a655-542cee43accc"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "LinearAlgebra", "ParallelTestRunner", "Random", "TOML", "Test"]
+test = ["Aqua", "ParallelTestRunner", "Random", "TOML", "Test"]
