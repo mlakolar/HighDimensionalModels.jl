@@ -33,19 +33,21 @@
 # in the same way. The primal and dual core, from the stored Float64 inputs (converted
 # exactly) to the verdict, is arithmetic in 256-bit BigFloat with a hand-derived
 # absolute error bound for each computed quantity; the error model is written above
-# `lasso_standardized_parts`. The value returned for an :ok certificate is an upper
-# bound of the relative gap (P - D)/max(P, floatmin), computed from P + eP - (D - eD)
-# and a lower bound of the denominator, so it does not underestimate the true gap. The
-# certificate is :uncertifiable when the error bound of the gap relative to that
-# denominator exceeds 1e-8, when the dual point cannot be shown feasible in the
-# original coordinates (|x̃ⱼ'θ| ≤ λ sⱼ in exact arithmetic) or a scale is not a
-# normal Float64 or is below its error bound. The Float64 steps outside the core are the
-# validation of the scales, the report of P, D, θ and t, and the rounding up of the
-# verdict. In exact arithmetic the profiled minimum over β₀ is the minimum of the centred
-# problem, so the dual value bounds it from below; a perturbation of β₀ away from the
-# profiled optimum for the fixed slopes raises the primal value and with it the absolute
-# duality gap, and a perturbation toward it lowers them (the relative gap need not change
-# in the same direction).
+# `lasso_standardized_parts`. It takes the target of the case as a required keyword and
+# computes an upper bound value_hi and a lower bound value_lo of the relative gap
+# (P - D)/max(P, floatmin) from the bounds of P and D. It is :uncertifiable when
+# value_lo ≤ target < value_hi (the rounding uncertainty could change pass/fail), and
+# otherwise returns value_hi, so that the harness verdict is the true one. It is also
+# :uncertifiable when the dual point cannot be shown feasible in the original coordinates
+# (|x̃ⱼ'θ| ≤ λ sⱼ in exact arithmetic), when the error bound of the gap relative to the
+# denominator exceeds 1e-8, and, for a column that is not constant, when its scale is not
+# a normal Float64 or is not above its error bound. The Float64 steps outside the core are
+# the validation of the scales, the report of P, D, θ and t, and the rounding of the two
+# bounds (up for value_hi, down for value_lo). In exact arithmetic the profiled minimum over
+# β₀ is the minimum of the centred problem, so the dual value bounds it from below; a
+# perturbation of β₀ away from the profiled optimum for the fixed slopes raises the primal
+# value and with it the absolute duality gap, and a perturbation toward it lowers them (the
+# relative gap need not change in the same direction).
 
 using LinearAlgebra
 
@@ -169,19 +171,29 @@ end
 # Weak duality: for the exact dual point tθ, which is feasible by the check above and sums to 0,
 # ‖r‖²/(2n) ≥ (tθ)ᵀr - n‖tθ‖²/2 and λ sⱼ|βⱼ| ≥ |βⱼ||x̃ⱼᵀ(tθ)|, so that P(β₀, β) ≥ D, where D is
 # the exact dual value, and D is below the minimum of the problem.
-# Verdict. P_hi = P̂ + eP, D_lo = D̂ - eD, P_lo = P̂ - eP. The relative gap of the harness is
-# max(P - D, 0)/max(P, floatmin(Float64)) (P ≥ 0). With den_lo = max(P_lo, floatmin) ≤ the
-# denominator and num_hi = max(P_hi - D_lo, 0) ≥ the numerator, the value num_hi/den_lo, rounded
-# up to a Float64, is at least the true relative gap. It is returned with `cert_ok` (the shared
-# `relative_gap` adds a rounding allowance and a clamp in Float64, which would break this
-# argument). The certificate is uncertifiable when (eP + eD)/den_lo > 1e-8 (1% of the smallest
-# target, 1e-6), or P_hi < D_lo (the bounds contradict weak duality), or the dual point cannot be
-# shown feasible, or a scale is not a normal Float64, or ŝⱼ ≤ esⱼ. Under the error model, a
-# reported value does not underestimate the true relative gap, so :ok is not false. A miss can be spurious only through
-# the excess of the value over the true gap, which is at most 2 (1 + gap) 1e-8 (num_hi ≤ num +
-# 2(eP + eD) and den_lo ≥ den - 2eP). The Float64 steps are: the exact conversion of the inputs,
-# the validation of the scales in `bad_scale`, and the conversion of P̂, D̂, θ̂, t for the report
-# (`report64`) and of the verdict (rounded up).
+# Verdict. P_hi = P̂ + eP, P_lo = P̂ - eP, D_hi = D̂ + eD, D_lo = D̂ - eD. The relative gap of the
+# harness is max(P - D, 0)/max(P, floatmin(Float64)) (P ≥ 0), and the harness records a miss when
+# the returned value exceeds the target. Let value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin) and
+# value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin) in BigFloat. Since P_lo ≤ P ≤ P_hi and
+# D_lo ≤ D ≤ D_hi, the numerator is between the numerators and the denominator between the
+# denominators, so value_lo ≤ the true relative gap ≤ value_hi. They are converted to Float64,
+# value_hi rounded up and value_lo rounded down, which keeps value_lo ≤ true ≤ value_hi in Float64.
+# Rule: if value_lo ≤ target < value_hi, the rounding uncertainty could change pass/fail and the
+# certificate is uncertifiable (the note gives both bounds and the target). Otherwise value_hi is
+# returned with `cert_ok`, and the harness verdict is the true one: if value_hi ≤ target the true
+# gap is at most the target (ok), and if target < value_lo the true gap exceeds the target (a miss,
+# and value_hi ≥ value_lo > target is a miss too). The shared `relative_gap` is bypassed: its
+# rounding allowance and Float64 clamp would break this argument. The certificate is also
+# uncertifiable when the error bounds contradict weak duality (P_hi < D_lo), when the dual point
+# cannot be shown feasible, when (eP + eD)/max(P_lo, floatmin) > 1e-8, when P or D is not a normal
+# Float64, and, for a column that is not constant (positive scale), when its scale is not a normal
+# Float64, is 0, or is not above its error bound (constant columns have scale 0 and no bound). The
+# 1e-8 cap is not needed for the verdict, which the rule above settles; it keeps the recorded value
+# within a stated distance of the true gap: value_hi exceeds the true gap by at most
+# 2 (1 + gap) 1e-8 before the final rounding (num_hi ≤ num + 2(eP + eD) and den_lo ≥ den - 2eP),
+# and the rounding up adds at most a relative 2⁻⁵² of the value. The Float64 steps are: the exact
+# conversion of the inputs, the validation of the scales in `bad_scale`, the report of P̂, D̂, θ̂, t
+# and the two verdict bounds (rounded up and down as stated).
 
 # The mean of v in BigFloat with the terms added in order; the value of a vector whose
 # entries are all equal (decided from the stored entries, exactly)
@@ -326,16 +338,22 @@ function lasso_standardized_parts(X, y, β₀, β, λ)
     width > 1e-8 && return "the error bound of the gap, relative to the primal value, is $(Float64(width)) > 1e-8: the arithmetic cannot support a certificate"
     gap = Float64(max(P_hi - D_lo, zero(BigFloat)) / den_lo, RoundUp)
     isfinite(gap) || return "the upper bound of the relative gap is not finite"
+    den_hi = max(P_hi, BigFloat(floatmin(Float64)))
+    gap_lo = Float64(max((P - eP) - (D + eD), zero(BigFloat)) / den_hi, RoundDown)
     P64, D64 = report64(P), report64(D)
     (P64 === nothing || D64 === nothing) && return "the primal or dual value is not a normal Float64"
     (; P = P64, D = D64, eP = Float64(eP, RoundUp), eD = Float64(eD, RoundUp), θ = Float64.(t .* θ), t = Float64(t),
-       feasibility = Float64(feasibility, RoundUp), width = Float64(width, RoundUp), gap)
+       feasibility = Float64(feasibility, RoundUp), width = Float64(width, RoundUp), gap, gap_lo,
+       Pb = P, ePb = eP, Db = D, eDb = eD)
   end
 end
 
-function lasso_gap_standardized(X, y, β₀, β, λ)
+function lasso_gap_standardized(X, y, β₀, β, λ; target::Float64)
+  isfinite(target) && target > 0 || return uncertifiable("the target must be finite and positive")
   a = lasso_standardized_parts(X, y, β₀, β, λ)
   a isa String && return uncertifiable(a)
+  a.gap_lo <= target < a.gap && return uncertifiable(
+    "the rounding uncertainty could change the verdict: the relative gap is in [$(a.gap_lo), $(a.gap)] and the target is $target")
   cert_ok(a.gap, :relative_gap; note = "upper bound; the relative width of the error bound is $(a.width)")
 end
 

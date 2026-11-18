@@ -106,6 +106,10 @@ end
 #
 ######################################################################
 
+# The target of `dense-standardized`, which its certificate also needs to decide whether the rounding
+# uncertainty could change the verdict
+const STANDARDIZED_TARGET = 1e-6
+
 function lasso_cases!(catalog)
   # λ = ratio λmax on the standardized scenario, in element type T, with the
   # solver of fixed configuration. The stopping tolerance tol is that of the
@@ -130,13 +134,13 @@ function lasso_cases!(catalog)
     (; X = p.X, y = p.y, λ, solver, levels = [λ])
   end
   standardized_call(s) = lasso(s.X, s.y, s.λ, s.solver; intercept = true, standardize_x = true)
-  standardized_certificate(s, out) = lasso_gap_standardized(s.X, s.y, out.intercept, out.coefficients, s.λ)
+  standardized_certificate(s, out) = lasso_gap_standardized(s.X, s.y, out.intercept, out.coefficients, s.λ; target = STANDARDIZED_TARGET)
 
   add_case!(catalog, "lasso", "lasso", "dense"; scenario = "ls-200x50",
     measure = MEASURE.gap, target = 1e-6,
     build = p -> lasso_inputs(p), call = lasso_call, certify = (p, s, out) -> lasso_certificate(s, out))
   add_case!(catalog, "lasso", "lasso", "dense-standardized"; scenario = "ls-200x50",
-    measure = MEASURE.gap, target = 1e-6,
+    measure = MEASURE.gap, target = STANDARDIZED_TARGET,
     build = p -> standardized_inputs(p), call = standardized_call,
     certify = (p, s, out) -> standardized_certificate(s, out))
   for (variant, scenario) in (("tall", "ls-tall-5000x40"), ("wide", "ls-wide-100x400"),

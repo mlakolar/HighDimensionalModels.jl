@@ -157,19 +157,28 @@ point is `tθ` with `θ = (r - r̄)/n`, and `t` the largest value up to 1, times
 with `t(|ĝⱼ| + egⱼ) ≤ λ(ŝⱼ - esⱼ)` for the columns with `sⱼ > 0`; that inequality is checked, and it gives
 `|x̃ⱼ'(tθ)| ≤ λ sⱼ` in exact arithmetic (a constant column has `x̃ⱼ = 0`). The exact dual value is
 `D = ỹ'(tθ) - n‖tθ‖²/2`, which is at most the objective at every `(β₀, β)`, and in particular at the
-profiled minimum. Let `P_hi = P̂ + eP`, `P_lo = P̂ - eP` and `D_lo = D̂ - eD`. The relative gap of the
-harness is `max(P - D, 0)/max(P, floatmin)`; with `den_lo = max(P_lo, floatmin)` and
-`num_hi = max(P_hi - D_lo, 0)`, the value `num_hi/den_lo`, rounded up to a Float64, is at least the true
-relative gap. The certificate returns it with `ok` and does not pass through the shared
-`relative_gap`, whose rounding allowance and Float64 clamp would break this argument. It is
-`uncertifiable` when `(eP + eD)/den_lo > 1e-8` (1% of the smallest target, `1e-6`), when
-`P_hi < D_lo`, when the dual point cannot be shown feasible, or when a scale is not a normal Float64,
-is `0` for a column that is not constant, or is not above its error bound. Under the error model, a
-reported value therefore does not underestimate the true relative gap, so an `ok` is not false, and a miss can be spurious only
-by a small amount in the value: it exceeds the true gap by at most `2(1 + gap)·1e-8` (from
-`num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`). The steps outside the BigFloat core are the exact input conversion, the
-validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the rounded-up
-verdict. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
+Let `P_hi = P̂ + eP`, `P_lo = P̂ - eP`, `D_hi = D̂ + eD` and `D_lo = D̂ - eD`. The relative gap of the
+harness is `max(P - D, 0)/max(P, floatmin)`, and the harness records a miss when the returned value
+exceeds the target. With `value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin)` and
+`value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin)`, the numerator lies between the two numerators
+and the denominator between the two denominators, so `value_lo ≤ the true relative gap ≤ value_hi`;
+`value_hi` is rounded up to a Float64 and `value_lo` down, which keeps the order. The certificate takes
+the target of the case as a required keyword (`dense-standardized` passes the constant it also gives
+`add_case!`). If `value_lo ≤ target < value_hi`, the rounding uncertainty could change pass/fail and it
+is `uncertifiable`, with a note that gives both bounds and the target. Otherwise it returns `value_hi`
+with `ok`, and the harness verdict is the true one: if `value_hi ≤ target` the true gap is at most the
+target, and if `target < value_lo` the true gap exceeds it (and so does `value_hi`). It does not pass
+through the shared `relative_gap`, whose rounding allowance and Float64 clamp would break this
+argument. It is also `uncertifiable` when `P_hi < D_lo`, when the dual point cannot be shown feasible,
+when `(eP + eD)/max(P_lo, floatmin) > 1e-8`, when `P` or `D` is not a normal Float64, and, for a column
+that is not constant (positive scale), when its scale is not a normal Float64, is `0`, or is not above
+its error bound (a constant column has scale `0` and no error bound). The cap `1e-8` is not needed for
+the verdict, which the rule above settles; it keeps the recorded value within a stated distance of the
+true gap: `value_hi` exceeds the true gap by at most `2(1 + gap)·1e-8` before the final rounding (from
+`num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`), and the rounding up adds at most a relative
+`2⁻⁵²` of the value. The steps outside the BigFloat core are the exact input conversion, the
+validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the two rounded
+bounds of the verdict. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
 problem, so `D` bounds it from below. A shift `δ` of `β₀` from the profiled optimum for the fixed `β`
 raises `P` (by `δ²/2` when the residuals have mean zero) and with it the absolute duality gap; a
 shift toward that optimum lowers them (the relative gap need not change in the same direction). The
@@ -178,8 +187,9 @@ target is the relative gap
 `(β₀, β)` is known by construction and shows that a perturbed `β₀` misses the target; it also
 checks a column whose squares underflow, a dual scaling near `1e-250`, a cancellation in `Xβ`
 (`repeat([1e120 1 -1e120], 2, 1)`, which is `uncertifiable`), the exact constant rule, the uncertifiable
-scales, and that the value is an upper bound of the exact relative gap of small problems computed in
-rational arithmetic.
+scales, that the value is an upper bound of the exact relative gap of small problems computed in
+rational arithmetic, the core inequality `|P̂ - P| ≤ eP`, and a case whose bounds straddle the target
+(`uncertifiable`) next to cases clearly below and above it (`ok`, with values on the right side).
 
 A coordinate-change test of the solver, such as `fit.result.converged`, is not
 an optimality certificate for this problem and decides no status.
