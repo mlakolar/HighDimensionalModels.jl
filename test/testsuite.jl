@@ -2,12 +2,13 @@
 # how each one runs. It depends only on TOML, so CI scripts can load it without installing the
 # package. test/runtests.jl refuses to run when a file is unclassified or a listed file is
 # missing, so a new test file cannot be silently skipped. The selection and worker-count helpers
-# at the end are used by test/runtests.jl; test/testsuite_validation.jl tests all of it.
+# at the end are used by test/runtests.jl, and `check_run` by scripts/test.jl;
+# test/testsuite_validation.jl tests all of it.
 module TestSuite
 
 using TOML
 
-export Inventory, discover, check, testsuite, alltests
+export Inventory, discover, check, testsuite, alltests, check_run
 
 struct Inventory
   "Test files run by the parallel runner, each in a fresh module on a reused worker."
@@ -146,5 +147,33 @@ Julia threads each, at least one. ParallelTestRunner applies its memory bound on
 `--jobs`/`PTR_NUM_JOBS` override both.
 """
 max_workers(threads::Integer, cpus::Integer = cpu_threads()) = max(1, cpus ÷ threads)
+
+"The line of test/runtests.jl that lists the selected test files, followed by their names."
+const SELECTION_PREFIX = "Selected test files: "
+
+"""
+    check_run(lines, expected = nothing) -> Vector{String}
+
+The test files that a run of test/runtests.jl selected, from its output `lines`. Throws unless
+the run printed its selection (one line starting with `SELECTION_PREFIX`), the selection is
+`expected` when given, and the runner's table of finished files has a row for every selected file.
+"""
+function check_run(lines::AbstractVector{<:AbstractString}, expected::Union{Nothing,AbstractVector{<:AbstractString}} = nothing)
+  chosen = [l for l in lines if startswith(l, SELECTION_PREFIX)]
+  length(chosen) == 1 || error("expected one `$(strip(SELECTION_PREFIX))` line in the runner's output, found $(length(chosen))")
+  selected = String.(split(chosen[1][length(SELECTION_PREFIX)+1:end]))
+  isempty(selected) && error("the runner selected no test file")
+  expected === nothing || sort(selected) == sort(expected) ||
+    error("the runner selected $(join(selected, " ")), expected $(join(sort(expected), " "))")
+  # The runner prints one row per finished file: `name (worker) │ time ...`.
+  reported = String[]
+  for line in lines
+    m = match(r"^(\S+)\s+\(\d+\)\s+│", replace(line, r"\e\[[0-9;]*m" => ""))
+    m === nothing || push!(reported, m[1])
+  end
+  unreported = setdiff(selected, reported)
+  isempty(unreported) || error("selected but not reported by the runner: $(join(sort!(collect(unreported)), " "))")
+  return selected
+end
 
 end
