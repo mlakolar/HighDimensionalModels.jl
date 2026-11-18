@@ -16,9 +16,9 @@ solver(T) = CDSolver(order = :cyclic, momentum = false, tol = T === Float32 ? 1e
 
   @testset "exports" begin
     @test Set(names(HighDimensionalModels)) ==
-          Set([:HighDimensionalModels, :lasso, :LassoSolution, :CDSolver, :coef, :predict, :residuals, :nobs])
-    # the four methods are those of StatsAPI, and CDSolver is the one of ProximalSolvers
-    for f in (coef, predict, residuals, nobs)
+          Set([:HighDimensionalModels, :lasso, :LassoSolution, :CDSolver, :coef, :predict, :residuals, :nobs, :dof, :deviance])
+    # the six methods are those of StatsAPI, and CDSolver is the one of ProximalSolvers
+    for f in (coef, predict, residuals, nobs, dof, deviance)
       @test nameof(parentmodule(f)) === :StatsAPI
       @test any(m -> m.sig <: Tuple{typeof(f), LassoSolution, Vararg}, methods(f))
     end
@@ -35,6 +35,8 @@ solver(T) = CDSolver(order = :cyclic, momentum = false, tol = T === Float32 ? 1e
     @test residuals(fit) === fit.residuals
     @test residuals(fit) == y - X * b                            # at the returned point
     @test nobs(fit) == 30 && nobs(fit) isa Int
+    @test dof(fit) == count(!iszero, b) && dof(fit) isa Int          # no intercept: the nonzero coefficients
+    @test deviance(fit) == sum(abs2, residuals(fit)) && deviance(fit) isa T
 
     @test predict(fit, X) isa Vector{T} && predict(fit, X) == X * b
     @test predict(fit, X) + residuals(fit) ≈ y rtol = 8 * eps(T)

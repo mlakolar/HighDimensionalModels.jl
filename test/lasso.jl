@@ -130,7 +130,7 @@ restoring_rng() do
       @test fit.result isa CDResults
       @test fit.result.minimizer === fit.coefficients                  # the documented field
       @test coef(fit) === fit.coefficients                             # coef returns the stored vector
-      @test propertynames(fit) == (:coefficients, :residuals, :λ, :result)
+      @test propertynames(fit) == (:coefficients, :residuals, :λ, :intercept, :hasintercept, :result)
       @test !hasproperty(fit, :converged)                              # no flag of HDM's own
       @test fit.result.converged && fit.result.passes >= 1 && fit.result.maxchange < fit.result.tolerance
       @test fit.residuals == y - X * coef(fit)

@@ -2,7 +2,8 @@
 
 This suite measures the time and Julia heap allocation of the public call
 `lasso(X, y, λ, solver)`. The output of each call is checked by an accuracy
-certificate computed from the inputs and the returned coefficients,
+certificate computed from the inputs and the returned coefficients (and, for the
+case with an intercept, the returned intercept),
 independently of the solver's stopping rule and of its convergence flag; an
 output that misses its target is a recorded failure, not a timing. It does not
 measure native (non-Julia) allocations or the statistical quality of the
@@ -66,6 +67,7 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 | Case | Suite | Scenario | Target (relative gap) |
 |---|---|---|---|
 | `lasso/lasso/dense` | quick | `ls-200x50` | 1e-6 |
+| `lasso/lasso/dense-standardized` | quick | `ls-200x50`, raw inputs, `intercept = true, standardize_x = true` | 1e-6 |
 | `lasso/lasso/tall` | extended | `ls-tall-5000x40` | 1e-6 |
 | `lasso/lasso/wide` | extended | `ls-wide-100x400` (p > n) | 1e-6 |
 | `lasso/lasso/correlated` | extended | `ls-corr-300x100` (equicorrelated columns, ρ = 0.5) | 1e-6 |
@@ -73,15 +75,18 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 | `lasso/lasso/float32` | extended | `ls-200x50`, Float32 | 1e-4 |
 | `controls/lasso/one-pass` | quick, with `HDM_GROUPS=controls` | `ls-200x50` | 1e-8, must end `target_missed` |
 
-`lasso` has no intercept, no standardization and no weights. The scenarios of
-`problems.jl` draw columns with shifted means and scales and a response with an
-intercept, so a case prepares its inputs, untimed: the columns are centered and
-scaled to mean square one, the response is centered, and the penalty level is
+The scenarios of `problems.jl` draw columns with shifted means and scales and a
+response with an intercept. `dense-standardized` passes them raw to
+`lasso(X, y, λ, solver; intercept = true, standardize_x = true)` at the level of
+`dense` (below). The other cases of the table and the control call `lasso` with its
+defaults (no intercept, no standardization), so each prepares its inputs, untimed: the
+columns are centered and scaled to mean square one, the response is centered, and the penalty level is
 `λ = 0.1 λmax` with `λmax = maxⱼ |xⱼ'y|/n` of those inputs. For the Float32 case
 the standardized Float64 inputs are rounded to Float32 first, `λmax` is computed
 from the rounded inputs (in Float64), and the level is rounded to Float32. In
 these coordinates the earlier lasso with an intercept and standardization
-solved the same scenarios at the same ratio `λ/λmax`. The solver is
+solved the same scenarios at the same ratio `λ/λmax`, which is the level of
+`dense-standardized` as well. The solver is
 `CDSolver(rng = Xoshiro(...))` with the package's defaults otherwise (random
 coordinate order, `tol = 1e-7`); the Float32 case sets `tol = 1e-6`. The
 generator is a Xoshiro seeded from a SHA-256 digest (`harness_rng("solver")`)
@@ -91,7 +96,10 @@ Observation, not a guarantee: with ProximalBase
 `13891ccfd5c33a042c5df82d670abf1f2d786a0f` and ProximalSolvers
 `dac9f4b6819d9321117ee3cf3549e9e46a043f01`, on Julia 1.10.13 and 1.13.4, the six
 lasso cases `dense`, `tall`, `wide`, `correlated`, `large` and `float32` met
-their targets in each of the repetitions 1 to 10. The largest relative gap among the
+their targets in each of the repetitions 1 to 10. The smoke run of the integrity checks
+(repetition 1, Julia 1.13.4, ProximalBase `51165b9eb0e1a100d03b1cee49e2853961779776`
+and ProximalSolvers `e8569b34ac622b164bddf2604ea563bb903f965a`) ended `ok` for
+`dense` and `dense-standardized`, with relative gaps of `9.9e-9` for both. The largest relative gap among the
 five Float64 cases was `4.2e-7` (`wide`), and `4.0e-7` for `float32`. The control ends
 `target_missed` (relative gap about `0.25` in repetition 1). Other dependency
 commits can give other values.
@@ -101,7 +109,8 @@ earlier ones.
 
 | Earlier case | Case now | Change |
 |---|---|---|
-| `lasso/lasso/dense-standardized` | `lasso/lasso/dense` | Inputs prepared as above instead of `intercept = true, standardize_x = true`. |
+| `lasso/lasso/dense-standardized` | the same id | Raw inputs, `intercept = true, standardize_x = true`, certified at the stored intercept and coefficients (below). |
+| (none) | `lasso/lasso/dense` | The default call on inputs prepared as above, which the case with the keywords does not replace. |
 | `lasso/lasso/wide`, `correlated`, `large` | the same ids | Inputs prepared as above. |
 | `lasso/lasso/gram-tall` | `lasso/lasso/tall` | The Gram option does not exist; the plain call. |
 | `lasso/lasso/float32` | the same id | Inputs prepared as above, then rounded to Float32. |
@@ -128,7 +137,61 @@ negative one (a violation of weak duality) makes the case `uncertifiable`. For
 relative to `max(1, ‖X'y‖∞/n)`, not a duality gap. `check_certificates.jl` tests it with
 analytic problems, problems whose solution is known by construction,
 nonoptimal points, weak duality, dual feasibility and nonfinite inputs, and
-runs the `dense` and `float32` cases and the control once against their targets.
+runs the `dense`, `dense-standardized` and `float32` cases and the control once against their targets.
+
+The certificate of `dense-standardized` (`lasso_gap_standardized`) is stated for the
+objective `‖y - β₀1 - Xβ‖²/(2n) + λ Σⱼ sⱼ|βⱼ|`, with `sⱼ` the root mean square of the
+centered column `xⱼ - x̄ⱼ`. A column whose entries are all equal has that value as its mean,
+centers to exact zeros and has scale 0, which the penalty ignores (a constant response is
+centered the same way). The primal and dual core, from the stored inputs (converted exactly to
+BigFloat) to the verdict, is arithmetic in 256-bit BigFloat, independent of the package, in which
+each computed quantity carries a hand-derived absolute error bound (the error model is written in a
+comment above `lasso_standardized_parts` in `certificates.jl`). With unit roundoff `u = 2⁻²⁵⁶` and
+`G(k) = 8ku`, a sum of `k` terms or a dot product of `k` pairs has error at most `G(k)Σ|tᵢ|`, with
+the magnitudes `Σ|aᵢ||bᵢ|` and not the computed sum carrying the cancellation; operand errors
+propagate by `|âᵀb̂ - aᵀb| ≤ Σ(|âᵢ| ebᵢ + |b̂ᵢ| eaᵢ + eaᵢ ebᵢ)`. The bounds cover the means, centered
+columns and scales (`esⱼ = εxⱼ + G(n+2)ŝⱼ`), the fitted values and residuals, the primal value
+`P = ‖r‖²/(2n) + λ Σⱼ sⱼ|βⱼ|` on the raw inputs at the stored intercept `β₀` and coefficients `β` (not
+`coef(out)`, which has `p + 1` entries), the correlations, the dual point and the dual value. The dual
+point is `tθ` with `θ = (r - r̄)/n`, and `t` the largest value up to 1, times `1 - 2⁻¹⁰⁰` when below 1,
+with `t(|ĝⱼ| + egⱼ) ≤ λ(ŝⱼ - esⱼ)` for the columns with `sⱼ > 0`; that inequality is checked, and it gives
+`|x̃ⱼ'(tθ)| ≤ λ sⱼ` in exact arithmetic (a constant column has `x̃ⱼ = 0`). The exact dual value is
+`D = ỹ'(tθ) - n‖tθ‖²/2`, which is at most the objective at every `(β₀, β)`, and in particular at the
+Let `P_hi = P̂ + eP`, `P_lo = P̂ - eP`, `D_hi = D̂ + eD` and `D_lo = D̂ - eD`. The relative gap of the
+harness is `max(P - D, 0)/max(P, floatmin)`, and the harness records a miss when the returned value
+exceeds the target. With `value_hi = max(P_hi - D_lo, 0)/max(P_lo, floatmin)` and
+`value_lo = max(P_lo - D_hi, 0)/max(P_hi, floatmin)`, the numerator lies between the two numerators
+and the denominator between the two denominators, so `value_lo ≤ the true relative gap ≤ value_hi`;
+`value_hi` is rounded up to a Float64 and `value_lo` down, which keeps the order. The certificate takes
+the target of the case as a required keyword (`dense-standardized` passes the constant it also gives
+`add_case!`). If `value_lo ≤ target < value_hi`, the rounding uncertainty could change pass/fail and it
+is `uncertifiable`, with a note that gives both bounds and the target. Otherwise it returns `value_hi`
+with `ok`, and the harness verdict is the true one: if `value_hi ≤ target` the true gap is at most the
+target, and if `target < value_lo` the true gap exceeds it (and so does `value_hi`). It does not pass
+through the shared `relative_gap`, whose rounding allowance and Float64 clamp would break this
+argument. It is also `uncertifiable` when `P_hi < D_lo`, when the dual point cannot be shown feasible,
+when `(eP + eD)/max(P_lo, floatmin) > 1e-8`, when a nonzero `P` or `D` would be reported as zero, a
+subnormal number or a non-finite number (a zero value is accepted), and, for a column
+that is not constant (positive scale), when its scale is not a normal Float64, is `0`, or is not above
+its error bound (a constant column has scale `0` and no error bound). The cap `1e-8` is not needed for
+the verdict, which the rule above settles; it keeps the recorded value within a stated distance of the
+true gap: `value_hi` exceeds the true gap by at most `2(1 + gap)·1e-8` before the final rounding (from
+`num_hi ≤ num + 2(eP + eD)` and `den_lo ≥ den - 2eP`), and the rounding up adds at most a relative
+`2⁻⁵²` of the value when the Float64 result is a positive normal number, and at most `nextfloat(0.0)` in
+absolute terms when it is subnormal. The steps outside the BigFloat core are the exact input conversion, the
+validation of the scales in Float64, and the report of `P`, `D`, `θ` and `t` and of the two rounded
+bounds of the verdict. In exact arithmetic the minimum of the problem over `β₀` is the minimum of the centered
+problem, so `D` bounds it from below. A shift `δ` of `β₀` from the profiled optimum for the fixed `β`
+raises `P` (by `δ²/2` when the residuals have mean zero) and with it the absolute duality gap; a
+shift toward that optimum lowers them (the relative gap need not change in the same direction). The
+target is the relative gap
+`1e-6`, as for the other cases. `check_certificates.jl` builds a problem whose solution
+`(β₀, β)` is known by construction and shows that a perturbed `β₀` misses the target; it also
+checks a column whose squares underflow, a dual scaling near `1e-250`, a cancellation in `Xβ`
+(`repeat([1e120 1 -1e120], 2, 1)`, which is `uncertifiable`), the exact constant rule, the uncertifiable
+scales, that the value is an upper bound of the exact relative gap of small problems computed in
+rational arithmetic, the core inequality `|P̂ - P| ≤ eP`, and a case whose bounds straddle the target
+(`uncertifiable`) next to cases clearly below and above it (`ok`, with values on the right side).
 
 A coordinate-change test of the solver, such as `fit.result.converged`, is not
 an optimality certificate for this problem and decides no status.
@@ -305,7 +368,7 @@ python3 benchmark/validate.py "$OUT/controls" "$OUT/controls.json"
 ```
 
 In order: the Python controls of the record tools; the environment; the
-certificate controls; the quick lasso case, which must end `ok` (the runner exits
+certificate controls; the quick lasso cases, which must end `ok` (the runner exits
 with 0); the validation of its records; the control case, which must end
 `target_missed` (the runner exits with 2); and the validation of its records.
 Under `bash -e`, a failing command other than the guarded control run
