@@ -29,8 +29,6 @@ The positional constructor `LassoSolution(coefficients, residuals, λ, intercept
 result)` is internal; build a fit with [`lasso`](@ref).
 
 `coef`, `predict`, `residuals`, `nobs`, `dof` and `deviance` from StatsAPI are defined for it.
-`propertynames(fit)` lists `coefficients`, `residuals`, `λ` and `result`; `propertynames(fit,
-true)` lists all the fields.
 """
 struct LassoSolution{T, R}
   coefficients::Vector{T}
@@ -40,10 +38,6 @@ struct LassoSolution{T, R}
   hasintercept::Bool
   result::R
 end
-
-Base.propertynames(::LassoSolution, private::Bool = false) =
-  private ? (:coefficients, :residuals, :λ, :intercept, :hasintercept, :result) :
-            (:coefficients, :residuals, :λ, :result)
 
 """
     lasso(X, y, λ, solver = CDSolver(); intercept = false, standardize_x = false) -> LassoSolution

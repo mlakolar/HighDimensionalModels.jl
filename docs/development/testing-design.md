@@ -89,8 +89,8 @@ a non-test, or listed but missing, so a new test file is not left out of a compl
 selection that matches no file is an error. `test/testsuite_validation.jl` tests these checks, `--only` and prefix
 selection, the check of the runner's report, and that a failing child-process test fails the run.
 
-The eight files are `aqua`, `ci_plan`, `dependencies`, `lasso`, `lasso_reference`, `smoke`,
-`statsapi` and `testsuite_validation`. The historical suite and its fixtures are on `legacy/full`.
+The nine files are `aqua`, `ci_plan`, `dependencies`, `lasso`, `lasso_intercept`, `lasso_reference`,
+`smoke`, `statsapi` and `testsuite_validation`. The historical suite and its fixtures are on `legacy/full`.
 
 ## 4. Source-to-test mapping
 
@@ -99,7 +99,7 @@ path globs and select families, test files, extra CI jobs, or the whole suite, e
 The planner (`scripts/ci_plan.jl`) takes the union of every rule matching every changed path; there
 is no first-match ordering. Levels are none, focused and full.
 
-With eight test files, a change outside documentation and `benchmark/` selects the complete suite: `src/**`,
+With nine test files, a change outside documentation and `benchmark/` selects the complete suite: `src/**`,
 `Project.toml`, `test/**`, `scripts/**` and `CI.yml` are full rules. Documentation and the other
 workflows select no test. `benchmark/**` selects no package test but the benchmark-integrity job.
 Rules that narrow a plan are kept for growth, with these protections:

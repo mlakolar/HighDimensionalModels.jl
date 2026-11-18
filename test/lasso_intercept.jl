@@ -720,8 +720,7 @@ setprecision(BigFloat, 256) do
     else
       @test fit.result.minimizer === fit.coefficients
     end
-    @test propertynames(fit) == (:coefficients, :residuals, :λ, :result)
-    @test propertynames(fit, true) == (:coefficients, :residuals, :λ, :intercept, :hasintercept, :result)
+    @test propertynames(fit) == (:coefficients, :residuals, :λ, :intercept, :hasintercept, :result)
     # the printed form shows the intercept when there is one
     s = sprint(show, fit)
     @test startswith(s, "LassoSolution: $p coefficients, $(count(!iszero, fit.coefficients)) nonzero, λ = $λ")
