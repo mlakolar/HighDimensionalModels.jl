@@ -27,8 +27,8 @@ module SqrtLassoTest
 # here, never as a negative number that a comparison with 1e-4 would accept. ProximalSolvers' certificate is a
 # bound of the same ratio, on its own problem.
 #
-# The perturbation term ω of (b), in the normal range. The derivation assumes that every nonzero quantity that
-# is rounded (the means, the centred entries, the scales, the entries of Ẑ and ỹ̂, the coefficients β̂, the
+# The perturbation term ω of (b), in the normal range. The derivation assumes that the nonzero quantities that
+# are rounded (the means, the centred entries, the scales, the entries of Ẑ and ỹ̂, the coefficients β̂, the
 # intercept, the residuals, and the Float64 level) is at least floatmin of its type in magnitude, so that a
 # rounding error is relative, at most u = eps(T)/2; `normal_range` below checks this precondition on a fit. A
 # result below floatmin is rounded with an absolute error up to nextfloat(zero)/2, a relative error up to 1, and
@@ -565,8 +565,8 @@ end
       @test iszero(f.coefficients) && f.intercept == c && f.result.converged && iszero(f.σ)
       @test f.result.gap == 0 && f.result.passes == 1 && iszero(f.residuals)
     end
-    # the minimizer is the same point for any solver settings, but ProximalSolvers certifies it only where the
-    # settings let the first full pass meet the change test: with maxpasses = 0, or tol = 0, converged is false
+    # the minimizer is the same point for these solver settings, and ProximalSolvers certifies it where the
+    # settings let the first full pass meet the change test; with maxpasses = 0, or tol = 0, converged is false
     y = fill(T(3), n)
     for solver in (CDSolver(order = :cyclic, momentum = false, maxpasses = 0),
                    CDSolver(order = :cyclic, momentum = false, tol = 0.0, maxpasses = 2))
