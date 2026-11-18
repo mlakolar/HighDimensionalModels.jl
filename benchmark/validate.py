@@ -21,23 +21,27 @@ HEADERS = {
     "errors": "id rep status exception stack".split(),
 }
 # Ordered by severity; a case takes the most severe status among its observations.
-STATUSES = ("ok", "target_missed", "uncertifiable", "incomplete", "timeout", "error")
-MEASURES = {"relative_gap", "kkt_residual", "fixed_point_residual", "objective_excess",
-            "coefficient_error", "feasibility", "consistency"}
+STATUSES = ("ok", "target_missed", "uncertifiable", "timeout", "error")
+MEASURES = {"relative_gap", "kkt_residual"}
 RECORD = "record"
-# The package hash identifies the revision: constant within a series, free between series.
+# The sources of the loaded packages: ProximalBase and ProximalSolvers are
+# identified by commit, tree state and version, which must not change within a
+# series and, for a comparison, must agree between the series. The package
+# hash identifies the measured revision: constant within a series, free between series.
+SOURCES = ("proximalbase", "proximalsolvers")
+SOURCE_FIELDS = tuple(f"{name}_{field}" for name in SOURCES for field in ("sha", "dirty", "version"))
 SERIES_SETTINGS = (
     "suite", "groups", "harness_hash", "julia_threads", "blas_threads", "blas",
     "cpu_model", "samples_target", "seconds_limit", "case_seconds", "profile_seconds",
     "seed_scheme", "dependencies", "package_hash",
-)
+) + SOURCE_FIELDS
 MATCH_SETTINGS = tuple(key for key in SERIES_SETTINGS if key != "package_hash")
 START_KEYS = (
     "julia", "rep", "suite", "groups", "harness_hash", "package_path", "package_sha",
-    "package_dirty", "package_hash", "expected_package_root", "julia_threads",
+    "package_dirty", "package_version", "package_hash", "expected_package_root", "julia_threads",
     "blas_threads", "blas", "cpu", "cpu_model", "samples_target", "seconds_limit",
     "case_seconds", "profile_seconds", "seed_scheme", "job_id", "dependencies",
-)
+) + tuple(f"{name}_{field}" for name in SOURCES for field in ("path", "sha", "dirty", "version"))
 FINAL_KEYS = ("cases", "ok_cases", "nonok_cases", "elapsed_s", "maxrss_bytes", "finished")
 SUFFIXES = tuple(f"-{kind}.tsv" for kind in HEADERS) + (
     "-metadata-start.toml", "-metadata.toml", "-profiles.txt",
@@ -166,11 +170,16 @@ def check_metadata(meta, version, rep, final=True):
     for key in ("julia_threads", "blas_threads"):
         if integer(meta[key], key, 1) != 1:
             raise ValueError("expected one Julia and one BLAS thread")
-    for key in ("harness_hash", "package_hash", "package_sha"):
+    for key in ("harness_hash", "package_hash", "package_sha",
+                *(f"{name}_sha" for name in SOURCES)):
         if not isinstance(meta[key], str) or not re.fullmatch(r"[0-9a-fA-F]{40}", meta[key]):
             raise ValueError(f"malformed provenance hash: {key}")
-    if not isinstance(meta["package_dirty"], bool):
-        raise ValueError("package_dirty must be boolean")
+    for key in ("package", *SOURCES):
+        if not isinstance(meta[f"{key}_dirty"], bool):
+            raise ValueError(f"{key}_dirty must be boolean")
+        for field in ("path", "version"):
+            if not isinstance(meta[f"{key}_{field}"], str) or not meta[f"{key}_{field}"]:
+                raise ValueError(f"malformed provenance field: {key}_{field}")
     if meta["expected_package_root"] and (
         Path(meta["package_path"]).resolve() != Path(meta["expected_package_root"]).resolve()
     ):
