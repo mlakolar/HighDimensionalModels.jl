@@ -22,7 +22,7 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   and StatsAPI. It needs the development `master` branches of ProximalBase (0.6 series) and
   ProximalSolvers 0.3.2 and does not resolve against the registry.
 - Removed: paths, screening and cross-validation; weights;
-  the weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and nonconvex
+  the weighted, adaptive, feasible and scaled lasso; the elastic net and nonconvex
   penalties; generalized linear models; group, sparse-group and multitask regression; quantile
   regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient models;
   post-selection inference; the general coordinate-descent interfaces and the deprecated names;
