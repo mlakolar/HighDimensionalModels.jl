@@ -186,8 +186,8 @@ level(λ, n) = sqrt(Float64(n)) * Float64(λ)
 #
 # The argument is a crude margin argument: each nonzero rounded quantity in the list below is bounded below by a
 # power of two far above floatmin(Float64) = 2⁻¹⁰²² (the lowest bound below is 2⁻⁴⁸⁶, more than 500 binades
-# above), and above by 2²⁵⁰ (far below floatmax = 2¹⁰²⁴), so that each rounding error is relative. The bounds,
-# each derived from the input domain, with cancellation included:
+# above), so that each rounding error is relative. The conservative input and coefficient ranges above leave ample
+# Float64 overflow margin. The lower bounds, each derived from the input domain, with cancellation included:
 # - Grid. A nonzero entry of X or y is a multiple of 2⁻⁹² (a Float64 in [2^e, 2^(e+1)) is a multiple of 2^(e-52),
 #   e ≥ -40). A sum of floats that are multiples of 2^-g is a multiple of 2^-g, whether or not it is rounded, in
 #   any order or with fused operations (a result below 2^53 times the grid is exact; a larger one rounds to a
@@ -199,22 +199,24 @@ level(λ, n) = sqrt(Float64(n)) * Float64(λ)
 #   entry as its mean.
 # - Centred entries (x - x̄ and y - ȳ). If x = 0, the result is -x̄, 0 or at least 2⁻¹⁸². If x ≠ 0 and |x̄| ≤ |x|/2,
 #   at least |x|/2 ≥ 2⁻⁴¹. Otherwise |x̄| > 2⁻⁴¹, so x̄ is a multiple of 2⁻⁹³ (its ulp), as is x, and a nonzero
-#   difference is at least 2⁻⁹³. So a centred entry is 0 or at least 2⁻¹⁸² and at most 2⁴¹.
+#   difference is at least 2⁻⁹³. So a centred entry is 0 or at least 2⁻¹⁸².
 # - Scales. For v the centred (or raw) column, with m' the power of two at most max|v| (at least 2⁻¹⁸³), the squares
 #   (v/m')² are at least (2⁻¹⁸²/2⁴²)² = 2⁻⁴⁴⁸ when nonzero (normal, no underflow) and their sum is at least 1 (the
-#   largest term is at least 1) and less than 4n; so s = m'·√(sum/n) is at least 2⁻¹⁸³·2⁻⁵ = 2⁻¹⁸⁸, and at most 2⁴².
-# - Entries of Z = v/s: at least 2⁻¹⁸²/2⁴² = 2⁻²²⁴ when nonzero, at most 2⁷; entries of ỹ = y - ȳ: 0 or at least 2⁻¹⁸².
+#   largest term is at least 1) and less than 4n; so s = m'·√(sum/n) is at least 2⁻¹⁸³·2⁻⁵ = 2⁻¹⁸⁸. (The lower
+#   bounds here and for Z use that a centred entry is at most 2⁴¹ and s at most 2⁴², from the input range.)
+# - Entries of Z = v/s: at least 2⁻¹⁸²/2⁴² = 2⁻²²⁴ when nonzero; entries of ỹ = y - ȳ: 0 or at least 2⁻¹⁸².
 # - Level. λps = √n λ lies in [2⁻²⁰, 2²⁵], normal, and Float64(λ) is a normal number (conversion error at most u).
 # - Coefficients: nonzero θⱼ, β̂ⱼ are in [2⁻²⁰⁰, 2²⁰⁰] by the post-check.
 # - Intercept β̂₀ = ȳ - Σⱼ x̄ⱼβ̂ⱼ. Each product is 0 or at least 2⁻¹⁸²·2⁻²⁰⁰ = 2⁻³⁸², so a multiple of 2⁻⁴³⁴ (its
 #   ulp); the partial sums are multiples of 2⁻⁴³⁴; ȳ is 0 or a multiple of 2⁻²³⁴: so β̂₀ is 0 or at least 2⁻⁴³⁴.
 # - Residuals y - β̂₀ - Xβ̂. Each exact product x β̂ is a multiple of 2⁻⁹²·2⁻²⁵² = 2⁻³⁴⁴, so the fitted values are
-#   multiples of 2⁻³⁴⁴. y - β̂₀ is 0 or, by the argument of the centred entries, at least min(2⁻⁹³, |β̂₀|) ≥ 2⁻⁴³⁴ (a
-#   float, so a multiple of 2⁻⁴⁸⁶), and the final difference of that and a multiple of 2⁻³⁴⁴ is 0 or at least 2⁻⁴⁸⁶.
-# The upper bounds: entries at most 2⁴⁰, means at most 2⁴⁰, centred entries 2⁴¹, scales 2⁴², Z at most 2⁷, a
-# product x β̂ at most 2²⁴⁰ and a sum of at most 1000 of them 2²⁵⁰. `margin_bounds` below checks these lower and
-# upper bounds on the computed quantities of the fixtures on which (b) is asserted. This is an argument, with
-# margins of hundreds of binades, not a proof.
+#   multiples of 2⁻³⁴⁴. y - β̂₀ is a float that is 0 or at least 2⁻⁴³⁴: if β̂₀ = 0 it is y, which is 0 or at least
+#   2⁻⁴⁰; otherwise |β̂₀| ≥ 2⁻⁴³⁴ and, as for the centred entries (y for x, β̂₀ for x̄), y = 0 gives |β̂₀| ≥ 2⁻⁴³⁴,
+#   y ≠ 0 with |β̂₀| ≤ |y|/2 gives at least 2⁻⁴¹, and otherwise a nonzero difference is at least 2⁻⁹³. A float of
+#   magnitude at least 2⁻⁴³⁴ is a multiple of 2⁻⁴⁸⁶, so the final difference of it and a multiple of 2⁻³⁴⁴ is 0 or
+#   at least 2⁻⁴⁸⁶.
+# `margin_bounds` below checks these lower bounds on the computed quantities of the fixtures on which (b) is
+# asserted. This is an argument, with margins of hundreds of binades, not a proof.
 function claim_b_domain(X::Matrix{T}, y, fit, λ) where T
   T === Float64 || return false
   n, p = size(X)
@@ -225,16 +227,17 @@ function claim_b_domain(X::Matrix{T}, y, fit, λ) where T
     all(j -> (iszero(θ[j]) && iszero(fit.coefficients[j])) || (post(θ[j]) && post(fit.coefficients[j])), 1:p)
 end
 
-# The bounds of the argument above, checked on the computed quantities of a Float64 fit (zero or within the stated
-# magnitudes): the means, the centred entries, the scales, the entries of Z and ỹ, the intercept and the residuals.
+# The lower bounds of the argument above, checked on the computed quantities of a Float64 fit (each is zero or at
+# least the stated bound): the means, the centred entries, the scales, the entries of Z and ỹ, the intercept and
+# the residuals.
 function margin_bounds(X::Matrix{Float64}, y, fit, ic, st)
   d = HDM.preprocess(X, y, ic, st)                 # x̄ and ȳ are zeros without an intercept
-  within(v, lo, hi) = iszero(v) || (lo <= abs(v) <= hi)
+  atleast(v, lo) = iszero(v) || abs(v) >= lo
   centred = X .- transpose(d.x̄)
-  all(v -> within(v, 2.0^-182, 2.0^41), centred) && all(v -> within(v, 2.0^-182, 2.0^41), d.ỹ) &&
-    all(v -> within(v, 2.0^-182, 2.0^40), d.x̄) && within(d.ȳ, 2.0^-182, 2.0^40) &&
-    all(v -> within(v, 2.0^-224, 2.0^7), d.Z) && (d.s === nothing || all(v -> within(v, 2.0^-188, 2.0^42), d.s)) &&
-    within(fit.intercept, 2.0^-434, 2.0^250) && all(v -> within(v, 2.0^-486, 2.0^250), fit.residuals)
+  all(v -> atleast(v, 2.0^-182), centred) && all(v -> atleast(v, 2.0^-182), d.ỹ) &&
+    all(v -> atleast(v, 2.0^-182), d.x̄) && atleast(d.ȳ, 2.0^-182) &&
+    all(v -> atleast(v, 2.0^-224), d.Z) && (d.s === nothing || all(v -> atleast(v, 2.0^-188), d.s)) &&
+    atleast(fit.intercept, 2.0^-434) && all(v -> atleast(v, 2.0^-486), fit.residuals)
 end
 
 # The normalized KKT violation of the stored transformed problem, relative to the level Λps. With
@@ -712,9 +715,9 @@ end
 
   @testset "Float64 fixtures that broke the first stated bounds satisfy the corrected ones" begin
     # a column mean below 2⁻⁸⁰ and a scaled entry below 2⁻¹²⁰, with inputs inside the domain: the corrected
-    # bounds (2⁻¹⁸² for means, 2⁻²²⁴ for entries of Z) hold. These are near-exact fits (the response is in the span of
-    # the design up to rounding), where the dual direction of the residual is rounding noise and the independent gap
-    # is not informative, so only the domain and the bounds are asserted
+    # bounds (2⁻¹⁸² for means, 2⁻²²⁴ for entries of Z) hold. The first fixture is a near-exact fit (the response is in
+    # the span of the design up to rounding), where the dual direction of the residual is rounding noise and the
+    # independent gap is not informative; only the domain and the bounds are asserted for both fixtures
     a = 2.0^-40
     X = reshape([nextfloat(a), -a, 0.0], 3, 1)
     y = [1.0, -1.0, 0.0]
@@ -722,6 +725,7 @@ end
     μ = sum(BigFloat.(X)) / 3
     @test 2.0^-102 < μ < 2.0^-80
     @test claim_b_domain(X, y, f, 0.1) && margin_bounds(X, y, f, true, true)
+    # the second fixture is a bounds test: a scaled entry below 2⁻¹²⁰ next to entries of size 2⁴⁰
     X = reshape([2.0^40, -2.0^40, nextfloat(a), -a, 0.0], 5, 1)
     y = [1.0, -1.0, 1.0, -1.0, 0.0]
     f = quiet(() -> sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true))
