@@ -1,6 +1,8 @@
 # HighDimensionalModels.jl
 
-HighDimensionalModels has the Gaussian lasso at a single penalty level, `lasso`, and the group lasso at a single penalty level, `group_lasso` (see the [group lasso page](group_lasso.md)). The lasso is
+HighDimensionalModels fits the Gaussian lasso at a single penalty level, [`lasso`](@ref) (with the elastic
+net through the keyword `alpha`), the square-root lasso, [`sqrt_lasso`](@ref), and the group lasso at a single
+penalty level, [`group_lasso`](@ref) (see the [group lasso page](group_lasso.md)). The Gaussian lasso solves
 
 ```math
 \min_{\beta \in \mathbb{R}^p}\ \frac{1}{2n}\lVert y - X\beta\rVert_2^2 + \lambda \lVert \beta \rVert_1 .
@@ -26,7 +28,9 @@ println(round.(coef(fit)[1:5]; digits = 2))
 ```
 
 The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net. The [lasso page](lasso.md) gives
-the inputs, the result, how convergence is reported and how to check a fit independently.
+the inputs, the result, how convergence is reported and how to check a fit independently. The
+[square-root lasso page](sqrt_lasso.md) gives the normalized objective of `sqrt_lasso`, which differs from the
+earlier function, and what its certificate covers.
 
 ## What is not supported
 
@@ -35,7 +39,7 @@ the inputs, the result, how convergence is reported and how to check a fit indep
   refused with an `ArgumentError`; nothing is converted.
 - An intercept, standardization and observation weights.
 - Penalty paths, screening, continuation and cross-validation.
-- Weighted, adaptive, feasible, scaled and square-root lasso; nonconvex penalties;
+- Weighted, adaptive, feasible and scaled lasso; nonconvex penalties;
   generalized linear models.
 - Sparse-group and multitask regression; quantile regression; SLOPE and knockoffs;
   structured and fused penalties; low-rank and sparse-plus-low-rank models;
@@ -53,8 +57,9 @@ the tag `archive/pre-minimal-core/master`.
 HighDimensionalModels
 ```
 
-The docstrings of `lasso` and `LassoSolution` are on the [lasso page](lasso.md), and those of `group_lasso` and
+The docstrings of `lasso` and `LassoSolution` are on the [lasso page](lasso.md), those of `sqrt_lasso` and
+`SqrtLassoSolution` on the [square-root lasso page](sqrt_lasso.md), and those of `group_lasso` and
 `GroupLassoSolution` on the [group lasso page](group_lasso.md).
 `CDSolver` is that of ProximalSolvers, re-exported. `coef`, `predict`, `residuals` and `nobs` are
 those of [StatsAPI.jl](https://github.com/JuliaStats/StatsAPI.jl), with methods for
-`LassoSolution` and `GroupLassoSolution`.
+`LassoSolution`, `SqrtLassoSolution` and `GroupLassoSolution`.

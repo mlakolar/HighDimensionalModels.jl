@@ -12,6 +12,7 @@ makedocs(
     pages = [
         "Home" => "index.md",
         "The lasso" => "lasso.md",
+        "The square-root lasso" => "sqrt_lasso.md",
         "The group lasso" => "group_lasso.md",
     ],
     checkdocs = :exports,

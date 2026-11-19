@@ -69,6 +69,7 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 | `lasso/lasso/dense` | quick | `ls-200x50` | 1e-6 |
 | `lasso/lasso/dense-standardized` | quick | `ls-200x50`, raw inputs, `intercept = true, standardize_x = true` | 1e-6 |
 | `lasso/elastic_net/dense` | quick | `ls-200x50`, raw inputs, `alpha = 0.5, intercept = true, standardize_x = true` | 1e-6 |
+| `lasso/sqrt_lasso/dense-standardized` | quick | `ls-200x50`, raw inputs, `sqrt_lasso(...; intercept = true, standardize_x = true)` at `λ = 0.3 λmax_sqrt` | 1e-4 |
 | `lasso/lasso/tall` | extended | `ls-tall-5000x40` | 1e-6 |
 | `lasso/lasso/wide` | extended | `ls-wide-100x400` (p > n) | 1e-6 |
 | `lasso/lasso/correlated` | extended | `ls-corr-300x100` (equicorrelated columns, ρ = 0.5) | 1e-6 |
@@ -117,8 +118,9 @@ earlier ones.
 | `lasso/lasso/wide`, `correlated`, `large` | the same ids | Inputs prepared as above. |
 | `lasso/lasso/gram-tall` | `lasso/lasso/tall` | The Gram option does not exist; the plain call. |
 | `lasso/lasso/float32` | the same id | Inputs prepared as above, then rounded to Float32. |
+| `lasso/sqrt_lasso/dense-standardized` | the same id | The normalized objective `‖y - β₀1 - Xβ‖/√n + λ‖θ‖₁` of `sqrt_lasso`, on the raw inputs, at `λ = 0.3 λmax_sqrt` of the normalized problem (below). The target is 1e-4, the relative gap that ProximalSolvers' certificate proves, in place of 1e-6. |
 | `controls/lasso/max-iter-1` | `controls/lasso/one-pass` | `CDSolver(maxpasses = 1)`; the solver's warning is silenced. |
-| `sparse-csc`, `weights-offset`, `sqrt_lasso`, `scaled_lasso`, `LassoPath`, `refit_lasso_path`, and every other group | none | The package has no such estimator, storage or option. |
+| `sparse-csc`, `weights-offset`, `scaled_lasso`, `LassoPath`, `refit_lasso_path`, and every other group | none | The package has no such estimator, storage or option. |
 
 ## Certificates and targets
 
@@ -228,6 +230,49 @@ certificate), and at the points near the designed optimum of the control their p
 from those of the certificate by more than 1% of the value, so these two errors would be detected by the
 controls. The control also runs the case once against its target.
 
+A coordinate-change test of the solver, such as `fit.result.converged`, is not
+an optimality certificate for this problem and decides no status.
+
+### The certificate of `lasso/sqrt_lasso/dense-standardized` (#223)
+
+The case calls `sqrt_lasso(X, y, λ, solver; intercept = true, standardize_x = true)` on the raw inputs of
+`ls-200x50`, at `λ = 0.3 λmax_sqrt`, where `λmax_sqrt = maxⱼ |zⱼ'ỹ|/(√n‖ỹ‖)` is computed by the harness
+(`sqrt_lambda_max` in `cases.jl`, sums in a fixed order) from the centered and scaled columns `zⱼ` and the
+centered response `ỹ`, as for `dense-standardized`. The solver is `CDSolver(rng = Xoshiro(...))`, seeded as
+for the other cases, with the package's defaults otherwise. `sqrt_lasso` minimizes
+`‖y - β₀1 - Xβ‖/√n + λ Σⱼ sⱼ|βⱼ|`, with `sⱼ` the root mean square of the centered column.
+
+The certificate (`sqrt_lasso_gap_standardized` in `certificates.jl`) is computed from the raw inputs and the
+returned intercept and coefficients, not from `fit.result`: it reads neither `converged` nor `gap`, and it
+is the duality gap in the original coordinates, which `converged` does not certify. With `r = y - β₀1 - Xβ`
+and `r_c` the residual centered at its mean, the dual point is `u = t r_c/‖r_c‖` with `t ≤ 1` as large as
+the error bounds allow for `|(xⱼ - x̄ⱼ)'u| ≤ λ√n sⱼ` to hold for the columns with `sⱼ > 0`; then `‖u‖ ≤ 1` and `1'u = 0`, so
+that `D = u'y/√n` is at most the minimum of the objective, which is at most the objective `P` at the returned
+point. As for the certificate of `dense-standardized`, the primal and dual core is arithmetic in 256-bit
+BigFloat with an absolute error bound for each computed quantity (the error model is written in the comment
+above `sqrt_lasso_standardized_parts`, which extends that of `lasso_standardized_parts` with the norm of the
+residual, the dual direction and the correlations divided by it), and the verdict, with `value_hi` and `value_lo` of the
+relative gap `(P - D)/max(P, floatmin)`, the rule `value_lo ≤ target < value_hi` for `uncertifiable` and the
+conditions that make the case `uncertifiable` are those of `dense-standardized`. The case is also
+`uncertifiable` when the centered residual `r_c` is zero or not above its error bound (the dual direction is
+undefined, as at an exact fit).
+
+The target is 1e-4, the level at which ProximalSolvers' duality certificate reports `converged`; the
+certificate here is independent of that report and measures the original coordinates, so its value
+can differ from the gap that the solver reports by the rounding of the preprocessing and the back-map. The `relative_gap`
+of the harness divides by `|P|`, which is weaker than the `(P - D)/D` that bounds `(P - P*)/P*` (`P ≥ D`), and
+it is valid: `(P - D)/P ≤ τ` gives `(P - D)/D ≤ τ/(1 - τ)`. `check_certificates.jl` tests the certificate with a
+square-root lasso whose solution `(β₀, β)` is known by construction (the gap at the designed optimum, the dual
+point, a perturbed intercept and perturbed coefficients), weak duality and dual feasibility at random points,
+a constant column, `λmax`, the uncertifiable exact fit (a zero residual) and a nonzero constant residual,
+an evaluation of the definition of the value in 512-bit arithmetic on a one-column problem whose minimizer is
+a root of a quadratic, a target between the bounds, invalid inputs, and, with the package, a tight `sqrt_lasso`
+fit and the case itself against its target.
+
+Observation, not a guarantee: with ProximalBase `7d5d1e006b02814fb28f8cfb5eca20a05d73ee9e` and
+ProximalSolvers `a0a064778acb34d0535408a31ab2f09ae657e4aa`, on Julia 1.13.4, repetition 1, the case ended `ok`
+with a certificate value of `1.3e-9`, against the target `1e-4`. Other dependency commits can give other values.
+
 ### Group lasso certificate
 
 The cases `group/group_lasso/orthonormal` and `group/group_lasso/none` pass the raw inputs of `groups-200x60`
@@ -258,9 +303,6 @@ nearly collinear group, groups with a singular Gram matrix, `λ = 0` and a weigh
 both cases once against their target.
 The solver's tolerance is explicit in each case: `1e-7` for `orthonormal` and `1e-8` for `none`, which left relative
 gaps of at most `6.3e-8` and `7.3e-8` in a pilot on repetitions 1 to 10 on Julia 1.13.4 (`1e-7` left up to `6.9e-7` for `none`).
-
-A coordinate-change test of the solver, such as `fit.result.converged`, is not
-an optimality certificate for this problem and decides no status.
 
 | Status | Meaning |
 |---|---|

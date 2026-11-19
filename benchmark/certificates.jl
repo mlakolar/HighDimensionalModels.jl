@@ -516,6 +516,139 @@ function elastic_net_gap(X, y, β₀, β, λ, α; target::Float64)
   cert_ok(a.gap, :relative_gap; note = "upper bound; the relative width of the error bound is $(a.width)")
 end
 
+# ---- square-root lasso (#223) ----
+#
+# `sqrt_lasso_gap_standardized` is the certificate for `sqrt_lasso` with an intercept and column scales
+# (λ > 0), at the stored intercept β₀ and coefficients β, from the raw inputs:
+#
+#   P = ‖y - β₀1 - Xβ‖/√n + λ Σⱼ sⱼ|βⱼ|,
+#
+# with sⱼ the root mean square of the centred column xⱼ - x̄ⱼ (0 for a column whose entries are all equal,
+# as for `lasso_gap_standardized`, whose helpers `centered_columns`, `bad_scale`, `errG` and `report64` it
+# uses). With r = y - β₀1 - Xβ and r_c = r - mean(r)1 (the exact residual of the stored point; the centring
+# is needed because 1ᵀr is not 0 for a rounded β₀), the dual point is u = t r_c/‖r_c‖ with
+# gⱼ = |x̃ⱼᵀr_c|/‖r_c‖ for x̃ⱼ = xⱼ - x̄ⱼ and t = min(1, minⱼ λ√n sⱼ/gⱼ) over the columns with sⱼ > 0.
+# Then ‖u‖ = t ≤ 1, 1ᵀu = 0 and |x̃ⱼᵀu| ≤ λ√n sⱼ, so that for every (b₀, b)
+#
+#   ‖y - b₀1 - Xb‖/√n + λ Σⱼ sⱼ|bⱼ| ≥ uᵀ(y - b₀1 - Xb)/√n + λ Σⱼ sⱼ|bⱼ| ≥ uᵀy/√n =: D
+#
+# (Cauchy–Schwarz, then 1ᵀu = 0 and the bound on |x̃ⱼᵀu|), and D is at most the minimum, which is at most P.
+# D = t r_cᵀy/(‖r_c‖√n) uses the raw y, since 1ᵀr_c = 0.
+#
+# The arithmetic is in 256-bit BigFloat with an absolute error bound for each computed quantity, in the
+# model of `lasso_standardized_parts` (G(k) = 8ku, u = 2⁻²⁵⁶; a hat marks a computed value). In addition to
+# the quantities of that chain (the centred columns x̂ with the bounds εx, the scales ŝ with es, the fitted
+# values and residuals r̂ with er), for the exact residual r:
+#   ‖r‖ = √Q for Q = Σ r̂ᵢ²: |√Q - √Q̂| ≤ eQ/√Q̂ for |Q - Q̂| ≤ eQ (|√a - √b| ≤ |a - b|/(√a + √b)), and the
+#     square root rounds by G(1); enr = eQ/√Q̂ + G(1)√Q̂; the division by the computed √n adds G(2) and √n has
+#     the lower bound √n(1 - G(1)):
+#     P̂ = ‖r̂‖/√n + λΣŝⱼ|βⱼ|, eP = (enr + G(2)√Q̂)/(√n(1 - G(1))) + λ(Σ esⱼ|βⱼ| + G(p+2)Σŝⱼ|βⱼ|) + G(3)P̂;
+#   centred residual û = r̂ - fl(mean r̂) with the error euᵢ = erᵢ + ecr + G(1)|ûᵢ| as in the lasso chain, and
+#     N̂ = √(Σûᵢ²) against N = ‖r_c‖: by the triangle inequality |‖û‖ - N| ≤ ‖eu‖, and the computed norm
+#     is within G(n+2) of ‖û‖, so eN = ‖eu‖(1 + G(n+2)) + G(n+2)N̂; the dual point exists where N̂ - eN > 0
+#     (the centred residual is not 0), which is the condition `uncertifiable` reports otherwise;
+#   correlations aⱼ = x̃ⱼᵀr_c: eaⱼ = G(n)Σ|x̂ᵢⱼ||ûᵢ| + Σ(|x̂ᵢⱼ|euᵢ + |ûᵢ|εxⱼ + εxⱼ euᵢ) for the computed
+#     âⱼ = x̂ⱼᵀû, and the ratios q = a/N: |a/N - â/N̂| ≤ ea/(N̂ - eN) + |â|eN/((N̂ - eN)N̂), which with the
+#     rounding of the quotient G(1)|â|/N̂ gives egⱼ for ĝⱼ = |âⱼ|/N̂;
+#   dual point tr_c/N: t = min(1, minⱼ λ√n(1 - G(3))(ŝⱼ - esⱼ)/(ĝⱼ + egⱼ)) over the columns with sⱼ > 0, times
+#     1 - 2⁻¹⁰⁰ when below 1, and the check t(ĝⱼ + egⱼ) ≤ λ√n(1 - G(3))(ŝⱼ - esⱼ), which gives
+#     |x̃ⱼᵀ(t r_c/N)| ≤ λ√n sⱼ in exact arithmetic;
+#   dual value D = t A/(N√n) for A = r_cᵀy: Â = Σ ûᵢyᵢ with eA = G(n)Σ|ûᵢ||yᵢ| + Σ euᵢ|yᵢ|, so that
+#     |A/N - Â/N̂| ≤ eA/(N̂ - eN) + |Â|eN/((N̂ - eN)N̂) and eD = t(that)/(√n(1 - G(1))) + G(6)|D̂|.
+# The verdict, the rounding of the two bounds and the conditions that make the case `uncertifiable` are those of
+# `lasso_standardized_parts` and `lasso_gap_standardized`: the relative gap of the harness is
+# max(P - D, 0)/max(P, floatmin(Float64)), so value_lo ≤ the true gap ≤ value_hi, and the certificate is
+# uncertifiable when value_lo ≤ target < value_hi, when P_hi < D_lo, when the dual point cannot be shown
+# feasible, when (eP + eD)/max(P_lo, floatmin) > 1e-8, and for the scales and the Float64 reports as
+# there. This denominator P is weaker than the D of the gap (P - D)/D that bounds (P - P*)/P*
+# (P ≥ D), and it is valid: (P - D)/P ≤ target gives (P - D)/D ≤ target/(1 - target).
+
+function sqrt_lasso_standardized_parts(X, y, β₀, β, λ)
+  d = cert_regression(X, y, β)
+  d isa String && return d
+  cert_finite(β₀) || return "nonfinite intercept"
+  cert_finite(λ) && λ > 0 || return "λ must be finite and positive"
+  (; X, y, β, n, p) = d
+  setprecision(BigFloat, 256) do
+    Xt, s, εx, es = centered_columns(X)
+    j = bad_scale(X, s)
+    j == 0 || return "the scale of column $j of X is not a normal Float64 (zero, subnormal or not finite) or is 0 for a column that is not constant"
+    positive = [j for j in 1:p if !iszero(s[j])]
+    all(j -> es[j] < s[j], positive) || return "the error bound of a scale is not below the scale (column $(first(j for j in positive if !(es[j] < s[j]))))"
+    λb, β₀b, yb, βb, Xb = BigFloat(λ), BigFloat(β₀), BigFloat.(y), BigFloat.(β), BigFloat.(X)
+    sn = sqrt(BigFloat(n))
+    snlo = sn * (1 - errG(1))
+    # primal
+    f = Xb * βb
+    ef = errG(p) .* (abs.(Xb) * abs.(βb))
+    r = (yb .- β₀b) .- f
+    er = ef .+ errG(2) .* (abs.(yb) .+ abs(β₀b) .+ abs.(f))
+    Q = sum(abs2, r)
+    iszero(Q) && return "the residual of the stored point is zero in the computed arithmetic: the dual direction is undefined"
+    eQ = sum(er[i] * (2 * abs(r[i]) + er[i]) for i in 1:n) + errG(n + 1) * Q
+    nr = sqrt(Q)
+    enr = eQ / nr + errG(1) * nr
+    πs = sum(s[j] * abs(βb[j]) for j in 1:p)
+    eΠ = λb * (sum(es[j] * abs(βb[j]) for j in 1:p) + errG(p + 2) * πs)
+    P = nr / sn + λb * πs
+    eP = (enr + errG(2) * nr) / snlo + eΠ + errG(3) * P
+    # dual point
+    r̄ = sum(r) / n
+    ecr = sum(er) / n + errG(n + 1) * sum(abs, r) / n
+    u = r .- r̄
+    eu = er .+ ecr .+ errG(1) .* abs.(u)
+    N = sqrt(sum(abs2, u))
+    eN = sqrt(sum(abs2, eu)) * (1 + errG(n + 2)) + errG(n + 2) * N
+    Nlo = N - eN
+    Nlo > 0 || return "the centred residual of the stored point is zero or not above its error bound: the dual direction is undefined"
+    ratio_error(a, ea) = ea / Nlo + abs(a) * eN / (Nlo * N)
+    a = [sum(Xt[i, j] * u[i] for i in 1:n) for j in 1:p]
+    ea = [errG(n) * sum(abs(Xt[i, j]) * abs(u[i]) for i in 1:n) +
+          sum(abs(Xt[i, j]) * eu[i] + abs(u[i]) * εx[j] + εx[j] * eu[i] for i in 1:n) for j in 1:p]
+    g = abs.(a) ./ N
+    eg = [ratio_error(a[j], ea[j]) + errG(1) * g[j] for j in 1:p]
+    Λlo = λb * sn * (1 - errG(3))
+    room = [Λlo * (s[j] - es[j]) for j in 1:p]
+    need = g .+ eg
+    t = one(BigFloat)
+    for j in positive
+      need[j] > room[j] && (t = min(t, room[j] / need[j]))
+    end
+    t < 1 && (t *= 1 - BigFloat(2)^-100)
+    all(j -> t * need[j] <= room[j], positive) || return "the dual point cannot be shown feasible in the original coordinates"
+    feasibility = isempty(positive) ? zero(BigFloat) : maximum(j -> t * need[j] / room[j], positive)
+    # dual value
+    A = sum(u[i] * yb[i] for i in 1:n)
+    eA = errG(n) * sum(abs(u[i]) * abs(yb[i]) for i in 1:n) + sum(eu[i] * abs(yb[i]) for i in 1:n)
+    D = t * A / (N * sn)
+    eD = t * ratio_error(A, eA) / snlo + errG(6) * abs(D)
+    # verdict
+    P_hi, D_lo = P + eP, D - eD
+    P_hi < D_lo && return "the error bounds contradict weak duality: P + eP = $(Float64(P_hi)) < D - eD = $(Float64(D_lo))"
+    den_lo = max(P - eP, BigFloat(floatmin(Float64)))
+    width = (eP + eD) / den_lo
+    width > 1e-8 && return "the error bound of the gap, relative to the primal value, is $(Float64(width)) > 1e-8: the arithmetic cannot support a certificate"
+    gap = Float64(max(P_hi - D_lo, zero(BigFloat)) / den_lo, RoundUp)
+    isfinite(gap) || return "the upper bound of the relative gap is not finite"
+    den_hi = max(P_hi, BigFloat(floatmin(Float64)))
+    gap_lo = Float64(max((P - eP) - (D + eD), zero(BigFloat)) / den_hi, RoundDown)
+    P64, D64 = report64(P), report64(D)
+    (P64 === nothing || D64 === nothing) && return "the primal or dual value is not a normal Float64"
+    (; P = P64, D = D64, eP = Float64(eP, RoundUp), eD = Float64(eD, RoundUp), u = Float64.(t .* u ./ N), t = Float64(t),
+       feasibility = Float64(feasibility, RoundUp), width = Float64(width, RoundUp), gap, gap_lo,
+       Pb = P, ePb = eP, Db = D, eDb = eD)
+  end
+end
+
+function sqrt_lasso_gap_standardized(X, y, β₀, β, λ; target::Float64)
+  isfinite(target) && target > 0 || return uncertifiable("the target must be finite and positive")
+  a = sqrt_lasso_standardized_parts(X, y, β₀, β, λ)
+  a isa String && return uncertifiable(a)
+  a.gap_lo <= target < a.gap && return uncertifiable(
+    "the rounding uncertainty could change the verdict: the relative gap is in [$(a.gap_lo), $(a.gap)] and the target is $target")
+  cert_ok(a.gap, :relative_gap; note = "upper bound; the relative width of the error bound is $(a.width)")
+end
+
 # ---- group lasso (#224) ----
 #
 # Certificate of `group_lasso` (intercept = true), at the returned intercept β₀ and coefficients β. The
