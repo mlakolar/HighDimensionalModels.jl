@@ -24,6 +24,7 @@ source = ["aqua"]
 
 [families]
 lasso = ["elastic_net", "lasso", "lasso_intercept", "lasso_reference", "statsapi"]
+sqrt_lasso = ["sqrt_lasso", "statsapi"]
 planner = ["ci_plan"]
 inventory = ["testsuite_validation"]
 

@@ -1,0 +1,925 @@
+module SqrtLassoTest
+# `sqrt_lasso`: the minimizer of the normalized objective
+#   ‖y - β₀1 - Xβ‖/√n + λ Σⱼ sⱼ|βⱼ|,
+# with β₀ = 0 unless `intercept` and sⱼ = 1 unless `standardize_x` (the root mean square of the centred
+# column, of the column itself without an intercept). The references share nothing with the
+# preprocessing or with coordinate descent: a duality gap, the objective and the weights in 256-bit
+# BigFloat from the stored Float inputs, the exact solution of constructed problems, and invariances
+# that hold bit for bit on data where the sums are exact.
+#
+# Two claims are tested apart (the docstring of `SqrtLassoSolution` states them):
+#   (a) the certification of the transformed problem: ProximalSolvers' `converged` and `gap` describe the
+#       problem it solved, the stored `(Z, ỹ)` in T at the level √n λ and the point θ. The dual gap of
+#       that problem is computed here in BigFloat from the stored data;
+#   (b) the accuracy in the original coordinates: the dual gap of the stored (β₀, β) on the raw X and y,
+#       which no field of the fit certifies, against 1e-4 plus a perturbation term derived below.
+#
+# The dual gap. Let x̄ and s be the column means (zero without an intercept) and weights, r = y - β₀1 - Xβ
+# (β₀ = 0 without an intercept), r_c = r - mean(r)1 with an intercept (r_c = r without one; with an intercept the
+# centring is needed, because with a rounded β₀ the vector 1ᵀr is not zero), and Λ = √n λ the level of the
+# objective ‖r‖ + Λ Σⱼ sⱼ|βⱼ|, which is √n times the one above. With gⱼ = |(xⱼ - x̄ⱼ)ᵀr_c|/(sⱼ‖r_c‖) over the
+# columns with sⱼ > 0 (g = 0 if there is none), t = min(1, Λ/maxⱼ gⱼ) and u = t r_c/‖r_c‖ (r_c ≠ 0): ‖u‖ ≤ 1,
+# |(xⱼ - x̄ⱼ)ᵀu| ≤ Λ sⱼ, and with an intercept 1ᵀu = 0. By Cauchy-Schwarz, for every b and, with an intercept,
+# every b₀ (without one b₀ = 0 and x̄ = 0), ‖y - b₀1 - Xb‖ + Λ Σⱼ sⱼ|bⱼ| ≥ uᵀ(y - b₀1 - Xb) + Λ Σⱼ sⱼ|bⱼ| ≥ uᵀy,
+# using |(xⱼ - x̄ⱼ)ᵀu| ≤ Λ sⱼ and, with an intercept, 1ᵀu = 0. So D = uᵀy is a lower bound of the minimum P*,
+# P = ‖r‖ + Λ Σⱼ sⱼ|βⱼ| an upper bound, and where D > 0, 0 < D ≤ P* ≤ P and (P - D)/D bounds the relative
+# suboptimality (P - P*)/P* of the stored point. Where D ≤ 0 it bounds nothing and the gap is reported as Inf
+# here, never as a negative number that a comparison with 1e-4 would accept. ProximalSolvers' certificate is a
+# bound of the same ratio, on its own problem.
+#
+# The perturbation term ω of (b). The derivation assumes that the nonzero quantities that are rounded (the means,
+# the centred entries, the scales, the entries of Ẑ and ỹ̂, the coefficients β̂, the intercept, the residuals) are
+# normal numbers of T, so that a rounding error is relative, at most u = eps(T)/2, and that the level λps = √n λ in
+# Float64 has a relative conversion error at most η_Λ below. A result below floatmin is rounded with an absolute
+# error up to nextfloat(zero)/2, a relative error up to 1, and the bounds below do not hold. The tests assert (b)
+# only for Float64 fixtures inside `claim_b_domain` below, a sufficient condition on the inputs (with a check on
+# the solution) under which these premises are argued to hold, with explicit lower bounds that `margin_bounds`
+# checks on those fixtures. Outside it (a fixture with β̂ⱼ = 0 for θⱼ ≠ 0, a scaled entry that underflows, a level
+# converted from a subnormal λ, scales 2^±400) (b) is not asserted. It is not asserted for Float32 at all: within
+# the same input ranges cancellation can give a subnormal residual or intercept (the testset "why claim (b) is
+# not asserted for Float32"), and the Float32 range (floatmin 2⁻¹²⁶) leaves too little headroom for a simple
+# argument. Claim (a), weak duality and the other assertions are made for Float32 as for Float64.
+# The solver sees Ẑ and ỹ̂, the rounded centred and scaled data in T, and returns θ; the stored β̂ⱼ = fl(θⱼ/ŝⱼ)
+# and β̂₀ = fl(ȳ̂ - x̄̂ᵀβ̂) are formed from them. Let Zⱼ, ỹ be the exact centred and scaled data, φ = Sβ̂ (exact weights s),
+# δ₀ = ȳ - x̄ᵀβ̂ - β̂₀, r̂ = ỹ̂ - Ẑθ and E = Ẑ - Z. Then
+#   r_c = ỹ - Zφ = r̂ - (ỹ̂ - ỹ) + Eθ + Z(θ - φ)   and   r = r_c + δ₀1,
+# so ‖r_c - r̂‖ ≤ Δ. Write G = (n + p + 8)u (the factor of a sum of n terms, with room for the scalings and the final
+# operations), c̄ = maxⱼ ‖Zⱼ‖/√n (1 with standardization), m̄ = maxⱼ |x̄ⱼ|/rmsⱼ and ‖ỹ‖ the norm of the exact
+# centred response. First-order bounds for the rounding of the preprocessing, with a factor 4 that absorbs the
+# products of errors, are
+#   ‖Eⱼ‖ ≤ ζ_Z = 4G√n c̄(1 + m̄),   ‖ỹ̂ - ỹ‖ ≤ ζ_y = 4G(‖ỹ‖ + 2√n|ȳ|),
+#   √n|δ₀| ≤ Δ₀ = 2G√n(2|ȳ| + ‖ỹ‖/√n + c̄(1 + 3m̄)‖φ‖₁),   ‖φ - θ‖₁ ≤ 4G(1 + m̄)‖φ‖₁,
+# where the error of a mean enters through |x̄ⱼ| + rmsⱼ, and with both keywords false these terms are set to
+# zero (the stored problem is the raw problem). Hence ‖r_c - r̂‖ ≤ Δ = ζ_y + 2ζ_Z‖φ‖₁. The relative
+# difference of the level, from the rounding of λps = √n λ in Float64 (a normal number), is η_Λ = 4·2⁻⁵³. For the
+# stored point and the exact quantities N = ‖r_c‖, d = r_c/N, g = maxⱼ gⱼ, and the hatted ones of the transformed
+# problem (the same formulas with x̄ = 0, s = 1 at Ẑ, ỹ̂, θ and the level Λ' = λps):
+#   |P - P̂| ≤ Δ + Δ₀ + (η_Λ + 4G(1 + m̄))Λ‖φ‖₁                      (‖r‖ ≤ ‖r_c‖ + √n|δ₀|),
+#   ‖d - d̂‖ ≤ 2Δ/N, |ĝ - g| ≤ δg = ζ_Z + (√n c̄ + ζ_Z)2Δ/N,
+#   |t - t̂| ≤ τ = (δg + η_ΛΛ)/((1 - η_Λ)Λ - δg)     (t = min(1, Λ/g): each case of the minimum gives the
+#                                                      bound (|ĝ - g| + |Λ - Λ'|)/min(g, ĝ), and min(g, ĝ) is at
+#                                                      least Λ' - δg wherever t ≠ t̂),
+#   |D - D̂| ≤ ΔD = ‖ỹ‖(2Δ/N + τ) + ζ_y             (D = t dᵀỹ, ‖d - d̂‖ and |t - t̂| as above).
+# Since P/D - P̂/D̂ = (ΔP D̂ - P̂ ΔD)/(D D̂) and P̂/D̂ = 1 + gap of the transformed problem ≤ 1 + 1e-4 (D, D̂ > 0),
+#   (P - D)/D ≤ gap_T + ω,   ω = (|P - P̂| bound + (1 + 1e-4) ΔD)/(D - ΔD),
+# which is what (b) tests with gap_T ≤ 1e-4 from (a). The bound is a worst case: the observed difference of the
+# two gaps is printed at the end of this file (a ratio below 1 is the margin), and the data of the tests keep
+# ω far below 1.
+
+using HighDimensionalModels, Test, LinearAlgebra, Random
+using ProximalBase: NormL1, SqrtLeastSquaresLoss
+using ProximalSolvers: solve!
+
+const HDM = HighDimensionalModels
+
+# a CoreLogging logger that drops the warnings of ProximalSolvers (an uncertified stop or maxpasses)
+quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+
+# ---------------------------------------------------------------------------------
+# settings and data
+# ---------------------------------------------------------------------------------
+
+tolof(T) = T === Float32 ? 1e-6 : 1e-10
+cyc(T; kw...) = CDSolver(order = :cyclic, momentum = false, tol = tolof(T), maxpasses = 2000; kw...)
+const COMBOS = ((false, false), (true, false), (false, true), (true, true))
+label(ic, st) = "intercept = $ic, standardize_x = $st"
+const UNCERTIFIED = r"stopped without a duality certificate"
+const CAPPED = r"did not converge in maxpasses"
+
+# columns of different scales and means, a response with an intercept
+function problem(T, seed, n, p; shift = 1.0, k = 3, noise = 0.5, offset = 1.0)
+  rng = Xoshiro(seed)
+  scales = 0.5 .+ 1.5 .* rand(rng, p)
+  X = randn(rng, n, p) .* transpose(scales) .+ transpose(shift .* randn(rng, p))
+  β = zeros(p); β[1:k] .= [2.0, -1.5, 1.0][1:k]
+  T.(X), T.(X * β .+ offset .+ noise .* randn(rng, n))
+end
+
+# data on a grid of 1/16, with n a power of two: the sums of a column are exact in Float32 and Float64
+grid(x) = round(x * 16) / 16
+function grid_problem(T, seed, n, p)
+  rng = Xoshiro(seed)
+  scales = [1.0, 2.0, 0.5, 4.0, 1.5, 3.0, 1.0, 2.5][1:p]
+  X = grid.(randn(rng, n, p) .* transpose(scales))
+  β = zeros(p); β[1:3] .= [2.0, -1.5, 1.0]
+  T.(X), T.(grid.(X * β .+ 1.0 .+ 0.5 .* randn(rng, n)))
+end
+
+# ---------------------------------------------------------------------------------
+# References in 256-bit BigFloat from the stored Float inputs
+# ---------------------------------------------------------------------------------
+
+dotb(a, b) = sum(a .* b)
+
+# the centred data and the weights of the objective: x̄, ȳ (zero without an intercept), the root mean
+# squares of the centred columns, and the weights s (those, or ones). The mean of a column whose entries
+# are all equal is that entry (the sum of equal Float entries and the division are exact here).
+function reference(X, y, intercept::Bool, standardize::Bool)
+  n, p = size(X)
+  Xb, yb = BigFloat.(X), BigFloat.(y)
+  x̄ = intercept ? [sum(Xb[:, j]) / n for j in 1:p] : zeros(BigFloat, p)
+  ȳ = intercept ? sum(yb) / n : zero(BigFloat)
+  Xt, yt = Xb .- transpose(x̄), yb .- ȳ
+  rms = [sqrt(sum(abs2, Xt[:, j]) / n) for j in 1:p]
+  (; Xb, yb, Xt, yt, x̄, ȳ, rms, s = standardize ? rms : ones(BigFloat, p), n, p)
+end
+
+# λmax of the normalized problem: the least λ with β = 0 optimal, maxⱼ |zⱼᵀỹ|/(√n‖ỹ‖) over sⱼ > 0, as a
+# Float64 (rounded from BigFloat)
+function lambda_max(X, y, intercept, standardize)
+  setprecision(BigFloat, 256) do
+    ref = reference(X, y, intercept, standardize)
+    top = maximum((abs(dotb(ref.Xt[:, j], ref.yt)) / ref.s[j] for j in 1:ref.p if !iszero(ref.s[j])); init = zero(BigFloat))
+    Float64(top / (sqrt(BigFloat(ref.n)) * sqrt(dotb(ref.yt, ref.yt))))
+  end
+end
+
+# The dual gap of the stored point (β₀, β) on the data X, y at the level Λ of ‖r‖ + Λ Σⱼ sⱼ|βⱼ|, as in the
+# header, with (P, D, gap, N) as Float64; `nothing` where r_c = 0 (the dual point is undefined). With
+# `eps_T` (the machine epsilon of the data's type) it also returns the term ω of the header, for a point
+# that comes from a solve in the transformed coordinates; `pre` says whether there was preprocessing.
+function dual_gap(X, y, β₀, β, Λ; intercept::Bool, standardize::Bool, eps_T = nothing, pre::Bool = true)
+  setprecision(BigFloat, 256) do
+    ref = reference(X, y, intercept, standardize)
+    (; Xb, yb, Xt, yt, x̄, ȳ, rms, s, n, p) = ref
+    βb, Λb = BigFloat.(β), BigFloat(Λ)
+    r = (yb .- BigFloat(β₀)) .- Xb * βb
+    rc = intercept ? r .- sum(r) / n : r
+    N = sqrt(dotb(rc, rc))
+    iszero(N) && return nothing
+    φ1 = sum(s[j] * abs(βb[j]) for j in 1:p)
+    P = sqrt(dotb(r, r)) + Λb * φ1
+    g = maximum((abs(dotb(Xt[:, j], rc)) / s[j] for j in 1:p if !iszero(s[j])); init = zero(BigFloat)) / N
+    t = g > Λb ? Λb / g : one(BigFloat)
+    D = t * dotb(rc, yb) / N
+    gap = D > 0 ? (P - D) / D : BigFloat(Inf)
+    out = (; P = Float64(P), D = Float64(D), gap = Float64(gap), N = Float64(N), weak = P - D >= -BigFloat(2)^-200 * P)
+    eps_T === nothing && return out
+    u = BigFloat(eps_T) / 2
+    G = (n + p + 8) * u
+    sn = sqrt(BigFloat(n))
+    ηΛ = 4 * BigFloat(2)^-53
+    yn = sqrt(dotb(yt, yt))
+    cbar = maximum((rms[j] / s[j] for j in 1:p if !iszero(s[j])); init = zero(BigFloat))
+    mbar = maximum((abs(x̄[j]) / rms[j] for j in 1:p if !iszero(rms[j])); init = zero(BigFloat))
+    ζZ = pre ? 4G * sn * cbar * (1 + mbar) : zero(BigFloat)
+    ζy = pre && intercept ? 4G * (yn + 2sn * abs(ȳ)) : zero(BigFloat)
+    Δ₀ = pre && intercept ? 2G * sn * (2abs(ȳ) + yn / sn + cbar * (1 + 3mbar) * φ1) : zero(BigFloat)
+    Δ = ζy + 2ζZ * φ1
+    ΔP = Δ + Δ₀ + (ηΛ + (pre ? 4G * (1 + mbar) : zero(BigFloat))) * Λb * φ1
+    δg = ζZ + (sn * cbar + ζZ) * 2Δ / N
+    den = (1 - ηΛ) * Λb - δg
+    ΔD = den > 0 ? yn * (2Δ / N + (δg + ηΛ * Λb) / den) + ζy : BigFloat(Inf)
+    ω = D > ΔD ? (ΔP + (1 + BigFloat(10)^-4) * ΔD) / (D - ΔD) : BigFloat(Inf)
+    merge(out, (; ω = Float64(ω), ΔP = Float64(ΔP)))
+  end
+end
+
+# the problem that ProximalSolvers solved: the stored Z and ỹ (the data themselves with both keywords false)
+transformed(X, y, ic, st) = ic || st ? HDM.preprocess(X, y, ic, st) : (; Z = X, ỹ = y)
+level(λ, n) = sqrt(Float64(n)) * Float64(λ)
+
+# A SUFFICIENT condition for the premises of the derivation of ω (see the header), not a checker of them, for
+# Float64 only (false for any other type). Inputs: n, p ≤ 1000; nonzero entries of X and y of magnitude in
+# [2⁻⁴⁰, 2⁴⁰]; λ in [2⁻²⁰, 2²⁰]. Post-check on the fit: θⱼ ≠ 0 exactly where β̂ⱼ ≠ 0, and every nonzero θⱼ and β̂ⱼ of
+# magnitude in [2⁻²⁰⁰, 2²⁰⁰] (the solution can be small or large, so this part depends on the fit).
+#
+# The argument is a crude margin argument: each nonzero rounded quantity in the list below is bounded below by a
+# power of two far above floatmin(Float64) = 2⁻¹⁰²² (the lowest bound below is 2⁻⁴⁸⁶, more than 500 binades
+# above), so that each rounding error is relative. The conservative input and coefficient ranges above leave ample
+# Float64 overflow margin. The lower bounds, each derived from the input domain, with cancellation included:
+# - Grid. A nonzero entry of X or y is a multiple of 2⁻⁹² (a Float64 in [2^e, 2^(e+1)) is a multiple of 2^(e-52),
+#   e ≥ -40). A sum of floats that are multiples of 2^-g is a multiple of 2^-g, whether or not it is rounded, in
+#   any order or with fused operations (a result below 2^53 times the grid is exact; a larger one rounds to a
+#   multiple of a larger power of two). So a nonzero sum is at least the grid.
+# - Means. The terms x/m, with m the power of two at most max|x| (so 2⁻⁴⁰ ≤ m ≤ 2⁴⁰), are exact multiples of
+#   2⁻⁹²/m, so of 2⁻¹³²: a nonzero sum of at most 1000 of them is at least 2⁻¹³², the division by n ≤ 1000 gives at
+#   least 2⁻¹⁴², and the product with m at least 2⁻¹⁸². So the computed mean of a column, or of y, is 0 or at
+#   least 2⁻¹⁸² (the exact mean is 0 or at least 2⁻⁹²/1000 > 2⁻¹⁰²). A column whose entries are all equal has its
+#   entry as its mean.
+# - Centred entries (x - x̄ and y - ȳ). If x = 0, the result is -x̄, 0 or at least 2⁻¹⁸². If x ≠ 0 and |x̄| ≤ |x|/2,
+#   at least |x|/2 ≥ 2⁻⁴¹. Otherwise |x̄| > 2⁻⁴¹, so x̄ is a multiple of 2⁻⁹³ (its ulp), as is x, and a nonzero
+#   difference is at least 2⁻⁹³. So a centred entry is 0 or at least 2⁻¹⁸².
+# - Scales. For v the centred (or raw) column, with m' the power of two at most max|v| (at least 2⁻¹⁸³), the squares
+#   (v/m')² are at least (2⁻¹⁸²/2⁴²)² = 2⁻⁴⁴⁸ when nonzero (normal, no underflow) and their sum is at least 1 (the
+#   largest term is at least 1) and less than 4n; so s = m'·√(sum/n) is at least 2⁻¹⁸³·2⁻⁵ = 2⁻¹⁸⁸. (The lower
+#   bounds here and for Z use that a centred entry is at most 2⁴¹ and s at most 2⁴², from the input range.)
+# - Entries of Z = v/s: at least 2⁻¹⁸²/2⁴² = 2⁻²²⁴ when nonzero; entries of ỹ = y - ȳ: 0 or at least 2⁻¹⁸².
+# - Level. λps = √n λ lies in [2⁻²⁰, 2²⁵], normal, and Float64(λ) is a normal number (conversion error at most u).
+# - Coefficients: nonzero θⱼ, β̂ⱼ are in [2⁻²⁰⁰, 2²⁰⁰] by the post-check.
+# - Intercept β̂₀ = ȳ - Σⱼ x̄ⱼβ̂ⱼ. Each product is 0 or at least 2⁻¹⁸²·2⁻²⁰⁰ = 2⁻³⁸², so a multiple of 2⁻⁴³⁴ (its
+#   ulp); the partial sums are multiples of 2⁻⁴³⁴; ȳ is 0 or a multiple of 2⁻²³⁴: so β̂₀ is 0 or at least 2⁻⁴³⁴.
+# - Residuals y - β̂₀ - Xβ̂. Each exact product x β̂ is a multiple of 2⁻⁹²·2⁻²⁵² = 2⁻³⁴⁴, so the fitted values are
+#   multiples of 2⁻³⁴⁴. y - β̂₀ is a float that is 0 or at least 2⁻⁴³⁴: if β̂₀ = 0 it is y, which is 0 or at least
+#   2⁻⁴⁰; otherwise |β̂₀| ≥ 2⁻⁴³⁴ and, as for the centred entries (y for x, β̂₀ for x̄), y = 0 gives |β̂₀| ≥ 2⁻⁴³⁴,
+#   y ≠ 0 with |β̂₀| ≤ |y|/2 gives at least 2⁻⁴¹, and otherwise a nonzero difference is at least 2⁻⁹³. A float of
+#   magnitude at least 2⁻⁴³⁴ is a multiple of 2⁻⁴⁸⁶, so the final difference of it and a multiple of 2⁻³⁴⁴ is 0 or
+#   at least 2⁻⁴⁸⁶.
+# `margin_bounds` below checks these lower bounds on the computed quantities of the fixtures on which (b) is
+# asserted. This is an argument, with margins of hundreds of binades, not a proof.
+function claim_b_domain(X::Matrix{T}, y, fit, λ) where T
+  T === Float64 || return false
+  n, p = size(X)
+  inrange(v) = iszero(v) || 2.0^-40 <= abs(v) <= 2.0^40
+  θ = fit.result.minimizer
+  post(v) = 2.0^-200 <= abs(v) <= 2.0^200
+  n <= 1000 && p <= 1000 && all(inrange, X) && all(inrange, y) && 2.0^-20 <= λ <= 2.0^20 &&
+    all(j -> (iszero(θ[j]) && iszero(fit.coefficients[j])) || (post(θ[j]) && post(fit.coefficients[j])), 1:p)
+end
+
+# The lower bounds of the argument above, checked on the computed quantities of a Float64 fit (each is zero or at
+# least the stated bound): the means, the centred entries, the scales, the entries of Z and ỹ, the intercept and
+# the residuals.
+function margin_bounds(X::Matrix{Float64}, y, fit, ic, st)
+  d = HDM.preprocess(X, y, ic, st)                 # x̄ and ȳ are zeros without an intercept
+  atleast(v, lo) = iszero(v) || abs(v) >= lo
+  centred = X .- transpose(d.x̄)
+  all(v -> atleast(v, 2.0^-182), centred) && all(v -> atleast(v, 2.0^-182), d.ỹ) &&
+    all(v -> atleast(v, 2.0^-182), d.x̄) && atleast(d.ȳ, 2.0^-182) &&
+    all(v -> atleast(v, 2.0^-224), d.Z) && (d.s === nothing || all(v -> atleast(v, 2.0^-188), d.s)) &&
+    atleast(fit.intercept, 2.0^-434) && all(v -> atleast(v, 2.0^-486), fit.residuals)
+end
+
+# The normalized KKT violation of the stored transformed problem, relative to the level Λps. With
+# r = ỹ - Zθ and cⱼ = zⱼᵀr/‖r‖, off the support the violation is (|cⱼ| - Λps)₊ and on it |cⱼ - Λps sign θⱼ|.
+function kkt(Z, ỹ, θ, Λps)
+  setprecision(BigFloat, 256) do
+    Zb, yb, θb = BigFloat.(Z), BigFloat.(ỹ), BigFloat.(θ)
+    r = yb .- Zb * θb
+    N = sqrt(dotb(r, r))
+    Λ = BigFloat(Λps)
+    v = zero(BigFloat)
+    for j in axes(Zb, 2)
+      c = dotb(Zb[:, j], r) / N
+      v = max(v, iszero(θb[j]) ? max(abs(c) - Λ, 0) : abs(c - Λ * sign(θb[j])))
+    end
+    (; viol = Float64(v / Λ), N = Float64(N), zmax = Float64(maximum(sqrt(dotb(Zb[:, j], Zb[:, j])) for j in axes(Zb, 2))))
+  end
+end
+
+# ---------------------------------------------------------------------------------
+# the checks of one fit
+# ---------------------------------------------------------------------------------
+
+# claims (a) and (b) for a fit of `sqrt_lasso(X, y, λ, ...; intercept = ic, standardize_x = st)`, when it
+# reports `converged`; the observed ratio of the two gaps' difference to ω is recorded in `margins`
+const margins = Float64[]
+function check_certified(fit, X::Matrix{T}, y, λ, ic, st; exact_fit = false, tight = true, claim_b = (T === Float64)) where T
+  n = size(X, 1)
+  @test fit.result.converged
+  d = transformed(X, y, ic, st)
+  a = dual_gap(d.Z, d.ỹ, 0, fit.result.minimizer, level(λ, n); intercept = false, standardize = false)
+  b = dual_gap(X, y, fit.intercept, fit.coefficients, sqrt(BigFloat(n)) * BigFloat(λ);
+               intercept = ic, standardize = st, eps_T = eps(T), pre = ic || st)
+  if a === nothing || b === nothing
+    # a zero residual: the dual point is undefined, so the gap formula is silent; the test takes this branch for a fit flagged exact_fit
+    @test exact_fit
+    return nothing
+  end
+  # (a) certification of the transformed problem: the independent gap is below the certified bound
+  @test a.weak && a.gap <= 1e-4
+  # and, where the residual is not tiny against the data, no larger than the reported bound up to the rounding of the
+  # dual direction (ProximalSolvers' dual point is along its own recomputed residual, this one along the exact one).
+  # The slack 1e-8 relative + 1e-12 absolute is empirical, for these fixtures; it is not derived (the assertion
+  # a.gap <= 1e-4 above is the claim)
+  tight && @test a.gap <= Float64(fit.result.gap) * (1 + 1e-8) + 1e-12
+  # (b) accuracy in the original coordinates: 1e-4 plus the perturbation term, asserted inside claim_b_domain only;
+  # outside it the fixture is checked to be outside, and the bound is not asserted (weak duality still holds)
+  @test b.weak
+  if claim_b
+    @test claim_b_domain(X, y, fit, λ)
+    @test margin_bounds(X, y, fit, ic, st)
+    @test b.gap <= 1e-4 + b.ω
+    isfinite(b.ω) && b.ω > 0 && push!(margins, max(b.gap - a.gap, 0) / b.ω)
+  else
+    @test !claim_b_domain(X, y, fit, λ)
+  end
+  (a, b)
+end
+
+# the stored fields of a fit at the point it returns
+function check_fields(fit, X::Matrix{T}, y, λ, ic) where T
+  n, p = size(X)
+  @test fit isa SqrtLassoSolution{T, <:Any}
+  @test fit.hasintercept == ic && fit.λ == T(λ) && (ic || iszero(fit.intercept))
+  @test length(fit.coefficients) == p && length(fit.residuals) == n
+  @test all(isfinite, fit.coefficients) && isfinite(fit.intercept) && isfinite(fit.σ)
+  # the residuals are those of y - β₀ - Xβ, and σ their root mean square
+  setprecision(BigFloat, 256) do
+    r = (BigFloat.(y) .- BigFloat(fit.intercept)) .- BigFloat.(X) * BigFloat.(fit.coefficients)
+    scale = maximum(abs, BigFloat.(y)) + abs(BigFloat(fit.intercept)) + maximum(abs.(BigFloat.(X)) * abs.(BigFloat.(fit.coefficients)); init = BigFloat(0))
+    @test all(i -> abs(BigFloat(fit.residuals[i]) - r[i]) <= (p + 4) * BigFloat(eps(T)) * scale, 1:n)
+    σ = sqrt(dotb(BigFloat.(fit.residuals), BigFloat.(fit.residuals)) / n)
+    @test abs(BigFloat(fit.σ) - σ) <= 4 * BigFloat(eps(T)) * (n + 4) * σ
+  end
+end
+
+# same fields, including all fields of the ProximalSolvers result (NaN equals NaN)
+function same_fit(a, b)
+  fields(f) = (f.coefficients, f.intercept, f.hasintercept, f.residuals, f.λ, f.σ, f.result.minimizer,
+               f.result.minimum, f.result.passes, f.result.converged, f.result.maxchange, f.result.tolerance,
+               f.result.kkt_checks, f.result.gap)
+  all(isequal(x, y) for (x, y) in zip(fields(a), fields(b))) && typeof(a) === typeof(b)
+end
+
+@testset "sqrt_lasso" begin
+
+  @testset "dual gap: transformed problem (a) and original coordinates (b), $T" for T in (Float32, Float64)
+    for (k, (ic, st)) in enumerate(COMBOS)
+      @testset "$(label(ic, st))" begin
+        n, p = 60, 8
+        X, y = problem(T, 10k, n, p)
+        λ = T(0.3 * lambda_max(X, y, ic, st))
+        fit = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+        check_fields(fit, X, y, λ, ic)
+        T === Float64 && @test fit.result.converged
+        @test count(!iszero, fit.coefficients) >= 1
+        # a Float32 run either certifies (checked independently) or reports that it did not
+        fit.result.converged ? check_certified(fit, X, y, λ, ic, st) : @test isnan(fit.result.gap)
+        T === Float64 && @test fit.result.gap <= 1e-4
+      end
+    end
+  end
+
+  @testset "claim (b) is strict at zero means in Float64" begin
+    # columns and response with exact zero means (each row followed by its negative), on a grid: the
+    # centring changes nothing, so with standardize_x = false the stored problem is the raw one
+    n, p = 64, 6
+    A, a = grid_problem(Float64, 5, n ÷ 2, p)
+    X, y = [A; -A], [a; -a]
+    for st in (false, true)
+      λ = 0.3 * lambda_max(X, y, true, st)
+      fit = sqrt_lasso(X, y, λ, cyc(Float64); intercept = true, standardize_x = st)
+      @test fit.result.converged && iszero(fit.intercept)
+      a_, b_ = check_certified(fit, X, y, λ, true, st)
+      st || @test b_.gap <= 1e-4                      # no allowance for the preprocessing
+      @test b_.gap <= 1e-6 && a_.gap <= 1e-6
+    end
+  end
+
+  @testset "level relation: the direct ProximalSolvers call at √n λ, $T" for T in (Float32, Float64)
+    for (k, (ic, st)) in enumerate(COMBOS)
+      n, p = 60, 8
+      X, y = problem(T, 20k, n, p)
+      λ = T(0.25 * lambda_max(X, y, ic, st))
+      mk() = CDSolver(tol = tolof(T), maxpasses = 2000, rng = Xoshiro(7))
+      fit = quiet(() -> sqrt_lasso(X, y, λ, mk(); intercept = ic, standardize_x = st))
+      d = transformed(X, y, ic, st)
+      θ = zeros(T, p)
+      res = quiet(() -> solve!(θ, SqrtLeastSquaresLoss(d.ỹ, d.Z), NormL1(sqrt(Float64(n)) * Float64(λ)), mk()))
+      # bit for bit: the solution of the solve at λps is the fit's result, field by field
+      r = fit.result
+      @test r.minimizer == θ == res.minimizer
+      @test all(isequal(getfield(r, f), getfield(res, f)) for f in fieldnames(typeof(r)))
+      # the level is a Float64 for either element type
+      @test sqrt(Float64(n)) * Float64(λ) isa Float64
+      # result.minimum / √n is the objective of sqrt_lasso on the stored problem, to the rounding of
+      # the solver's own sums, and on the original data to the perturbation of claim (b)
+      # (where the run stopped at a certificate or without one, the minimum is formed from the residual
+      # that the certificate recomputed; at maxpasses it is the solver's running residual)
+      r.converged && setprecision(BigFloat, 256) do
+        Zb, yb, θb = BigFloat.(d.Z), BigFloat.(d.ỹ), BigFloat.(θ)
+        e = yb .- Zb * θb
+        primal = sqrt(dotb(e, e) / n) + BigFloat(λ) * sum(abs, θb)
+        @test abs(BigFloat(r.minimum) / sqrt(BigFloat(n)) - primal) <= (n + p + 8) * BigFloat(eps(T)) * primal
+      end
+      b = dual_gap(X, y, fit.intercept, fit.coefficients, sqrt(BigFloat(n)) * BigFloat(λ);
+                   intercept = ic, standardize = st, eps_T = eps(T), pre = ic || st)
+      b === nothing || !r.converged || @test abs(b.P - Float64(r.minimum)) <= 2 * b.ΔP + 4 * (n + p + 8) * eps(T) * b.P
+    end
+    # a level that Float64 rounds: λ = 1/3 in Float64 for Float32 data keeps the Float64 rounding of √n λ
+    X, y = problem(T, 777, 60, 5)
+    λ = 1 / 3
+    fit = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); standardize_x = false))
+    θ = zeros(T, 5)
+    res = quiet(() -> solve!(θ, SqrtLeastSquaresLoss(y, X), NormL1(sqrt(60.0) * (1 / 3)), cyc(T)))
+    @test fit.result.minimizer == θ && fit.λ == T(1 / 3)
+    # a level of another Real type reaches the solver as Float64(λ)
+    fit_i = quiet(() -> sqrt_lasso(X, y, 1, cyc(T); standardize_x = false))
+    fit_f = quiet(() -> sqrt_lasso(X, y, 1.0, cyc(T); standardize_x = false))
+    @test same_fit(fit_i, fit_f)
+    fit_r = quiet(() -> sqrt_lasso(X, y, 1 // 2, cyc(T); standardize_x = false))
+    fit_h = quiet(() -> sqrt_lasso(X, y, 0.5, cyc(T); standardize_x = false))
+    @test same_fit(fit_r, fit_h)
+  end
+
+  @testset "the level boundary: β = 0 for λ at or above λmax of the data, $T" for T in (Float32, Float64)
+    # λmax = maxⱼ |zⱼᵀỹ|/(√n‖ỹ‖) is computed from the data above (not by the solver); 1 + 1e-9 is above it
+    # by far more than the rounding of its computation and 1 - 1e-3 is far above the solver's change
+    # threshold. The Float32 level is rounded to Float32, so its sides are 1 ± 1e-3.
+    above, below = T === Float32 ? (1 + 1e-3, 1 - 1e-2) : (1 + 1e-9, 1 - 1e-3)
+    for (ic, st) in COMBOS
+      X, y = problem(T, 31, 60, 8)
+      λmax = lambda_max(X, y, ic, st)
+      fit = quiet(() -> sqrt_lasso(X, y, T(λmax * above), cyc(T); intercept = ic, standardize_x = st))
+      @test iszero(fit.coefficients) && fit.result.converged
+      fit = quiet(() -> sqrt_lasso(X, y, T(λmax * below), cyc(T); intercept = ic, standardize_x = st))
+      @test count(!iszero, fit.coefficients) >= 1
+    end
+  end
+
+  @testset "KKT of the transformed problem within the tolerance implied by the stopping test, $T" for T in (Float32, Float64)
+    # At a full pass whose largest scaled change is below tolerance = result.tolerance, each coordinate
+    # was a minimizer when visited, and the residual direction moved by at most p·tolerance·‖zⱼ‖/‖r‖
+    # afterwards, so |violation|/Λps ≤ 2 p tolerance zmax/(‖r‖Λps) (first order, with a factor 2); the
+    # roundoff of the correlations adds 4(n + p + 8)u zmax/Λps. The conditions are a diagnostic: the gap
+    # of claim (a) carries the evidence.
+    for (k, (ic, st)) in enumerate(COMBOS)
+      n, p = 60, 8
+      X, y = problem(T, 40k, n, p)
+      λ = T(0.3 * lambda_max(X, y, ic, st))
+      fit = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      fit.result.converged || continue
+      d = transformed(X, y, ic, st)
+      Λps = level(λ, n)
+      q = kkt(d.Z, d.ỹ, fit.result.minimizer, Λps)
+      tol = 2p * Float64(fit.result.tolerance) * q.zmax / (q.N * Λps) + 4 * (n + p + 8) * eps(T) * q.zmax / Λps
+      @test q.viol <= tol
+    end
+  end
+
+  @testset "keyword combinations and defaults, $T" for T in (Float32, Float64)
+    n, p = 60, 8
+    X, y = problem(T, 50, n, p)
+    λ = T(0.3 * lambda_max(X, y, false, true))
+    mk() = CDSolver(order = :cyclic, momentum = false, tol = tolof(T), maxpasses = 2000)
+    # the defaults are intercept = false, standardize_x = true
+    f0 = quiet(() -> sqrt_lasso(X, y, λ, mk()))
+    f1 = quiet(() -> sqrt_lasso(X, y, λ, mk(); intercept = false, standardize_x = true))
+    @test same_fit(f0, f1) && !f0.hasintercept && iszero(f0.intercept) && length(coef(f0)) == p
+    # without a solver argument the solver is CDSolver(), whose coordinate order is random and drawn from the task's
+    # generator, which is restored here
+    saved = copy(Random.default_rng())
+    try
+      @test quiet(() -> sqrt_lasso(X, y, λ)) isa SqrtLassoSolution{T}
+    finally
+      copy!(Random.default_rng(), saved)
+    end
+    for (ic, st) in COMBOS
+      f = quiet(() -> sqrt_lasso(X, y, λ, mk(); intercept = ic, standardize_x = st))
+      @test f.hasintercept == ic && length(coef(f)) == p + ic
+      ic ? @test(coef(f) == [f.intercept; f.coefficients]) : @test(coef(f) === f.coefficients)
+    end
+  end
+
+  @testset "invariances, $T" for T in (Float32, Float64)
+    # n a power of two and entries on a grid of 1/16 and integer shifts: the sums of a column are exact,
+    # so the centred columns, the scales and the solve are bitwise those of the unshifted data
+    n, p = 64, 6
+    X, y = grid_problem(T, 61, n, p)
+    shifts = T[3, -2, 5, 0, 7, -4]
+    for st in (false, true)
+      λ = T(0.3 * lambda_max(X, y, true, st))
+      f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = true, standardize_x = st))
+      g = quiet(() -> sqrt_lasso(X .+ transpose(shifts), y .+ T(9), λ, cyc(T); intercept = true, standardize_x = st))
+      @test f.coefficients == g.coefficients
+      @test f.result.minimizer == g.result.minimizer && isequal(f.result.gap, g.result.gap)
+      # the intercept and the residuals are formed in T from shifted values: equal to the rounding of those sums
+      @test g.intercept ≈ f.intercept + T(9) - sum(shifts .* f.coefficients) atol = 8 * eps(T) * (p + 4) * 20
+      @test isapprox(g.residuals, f.residuals; atol = 8 * eps(T) * (p + 4) * 40) && isapprox(g.σ, f.σ; atol = 8 * eps(T) * (p + 4) * 40)
+    end
+    # a power-of-two rescaling of one column: with standardization the weights absorb it, so the standardized
+    # coefficient is unchanged and βⱼ scales by 1/c (bit for bit); without it the penalty is on βⱼ itself
+    λ = T(0.3 * lambda_max(X, y, true, true))
+    f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = true, standardize_x = true))
+    for c in (T(2)^10, T(2)^-10)
+      Xc = copy(X); Xc[:, 2] .*= c
+      g = quiet(() -> sqrt_lasso(Xc, y, λ, cyc(T); intercept = true, standardize_x = true))
+      @test g.coefficients[2] == f.coefficients[2] / c
+      @test g.coefficients[[1; 3:p]] == f.coefficients[[1; 3:p]] && g.result.minimizer == f.result.minimizer
+      @test g.σ == f.σ && g.intercept == f.intercept
+    end
+  end
+
+  @testset "extreme representable scales, $T" for (T, k) in ((Float64, 400), (Float32, 40))
+    # y -> c y with c a power of two inside the range of the certificate, at a fixed λ: the fit scales by c
+    # (the problem is homogeneous of degree one in y), and σ and the intercept too
+    n, p = 60, 8
+    for (ic, st) in ((true, true), (false, false))
+      X, y = problem(T, 71, n, p)
+      λ = T(0.3 * lambda_max(X, y, ic, st))
+      f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      @test f.result.converged
+      for c in (T(2)^k, T(2)^-k)
+        g = quiet(() -> sqrt_lasso(X, c .* y, λ, cyc(T); intercept = ic, standardize_x = st))
+        @test g.result.converged
+        @test isapprox(g.coefficients, c .* f.coefficients; rtol = T === Float64 ? 1e-8 : 1e-4)
+        @test isapprox(g.σ, c * f.σ; rtol = T === Float64 ? 1e-8 : 1e-4) && isapprox(g.intercept, c * f.intercept; rtol = T === Float64 ? 1e-8 : 1e-4)
+        @test g.coefficients ≈ c .* f.coefficients rtol = 1e-4
+        # the fit is certified on its own scale: claim (a) at the scaled data (claim (b) is not asserted: the scaled
+        # entries are outside the domain)
+        check_certified(g, X, c .* y, λ, ic, st; claim_b = false)
+      end
+    end
+    # design scale, X -> c X: with standardization β scales by 1/c and λ is unchanged; without it λ -> c λ
+    X, y = problem(T, 72, n, p)
+    for c in (T(2)^(k ÷ 2), T(2)^-(k ÷ 2))
+      for (ic, st) in ((true, true), (true, false))
+        λ = T(0.3 * lambda_max(X, y, ic, st))
+        λc = st ? λ : T(c * λ)
+        f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+        g = quiet(() -> sqrt_lasso(c .* X, y, λc, cyc(T); intercept = ic, standardize_x = st))
+        @test f.result.converged && g.result.converged
+        @test isapprox(g.coefficients, f.coefficients ./ c; rtol = T === Float64 ? 1e-8 : 1e-4)
+        @test isapprox(g.σ, f.σ; rtol = T === Float64 ? 1e-8 : 1e-4)
+      end
+    end
+  end
+
+  @testset "design scale where ProximalSolvers refuses or the standardization absorbs it (Float64)" begin
+    # a design whose squares overflow or underflow in Float64: with standardization Z is finite and the fit
+    # is that of the unscaled problem; without it ProximalSolvers refuses the curvature, with an ArgumentError
+    # that is not changed here, and no fit is returned
+    n, p = 60, 8
+    X, y = problem(Float64, 73, n, p)
+    f = sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true)
+    for c in (1e200, 1e-200)
+      g = sqrt_lasso(c .* X, y, 0.1, cyc(Float64); intercept = true)
+      @test g.result.converged && isapprox(g.coefficients .* c, f.coefficients; rtol = 1e-8)
+      err = try sqrt_lasso(c .* X, y, 0.1 * c, cyc(Float64); intercept = true, standardize_x = false); nothing catch e e end
+      @test err isa ArgumentError && occursin("rescale the data", sprint(showerror, err))
+    end
+  end
+
+  @testset "outside the range of the certificate: an uncertified stop, Float64" begin
+    # a response of scale 2^-500 has a residual with Σr̂² below n 2⁻⁹⁶⁹: ProximalSolvers' certificate is
+    # undefined there, and the run stops before maxpasses without a certificate
+    n, p = 60, 8
+    X, y = problem(Float64, 74, n, p)
+    c = 2.0^-500
+    f = @test_logs (:warn, UNCERTIFIED) sqrt_lasso(X, c .* y, 0.1, cyc(Float64); intercept = true)
+    @test !f.result.converged && isnan(f.result.gap) && f.result.passes < 2000
+    @test all(isfinite, f.coefficients) && count(!iszero, f.coefficients) >= 1
+    f0 = sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true)
+    @test isapprox(f.coefficients, c .* f0.coefficients; rtol = 1e-6)
+  end
+
+  @testset "an exact fit that reaches the uncertified stop, $T" for T in (Float32, Float64)
+    # dyadic data with y = 2 X[:, 1], cyclic order, standardize_x = false: the products and sums of the first
+    # visit are exact on dyadic data, so it sets β₁ = 2 with a zero residual, and the certificate is undefined
+    # there (a zero residual with a nonzero coefficient). This needs λps < ‖X[:, 1]‖, so that the first visit
+    # does not set β₁ to 0
+    rng = Xoshiro(81)
+    X = T.(rand(rng, -4:4, 8, 3)) ./ 4
+    X[:, 1] .= T[1, 2, 3, -1, 2, 0.5, -2, 1]
+    y = 2 .* X[:, 1]
+    λ = T(0.25 * norm(X[:, 1]) / sqrt(8))
+    @test level(λ, 8) < norm(Float64.(X[:, 1]))
+    f = @test_logs (:warn, UNCERTIFIED) sqrt_lasso(X, y, λ, cyc(T); standardize_x = false)
+    @test !f.result.converged && isnan(f.result.gap) && f.result.passes < 2000 && f.result.passes >= 1
+    @test f.coefficients[1] == 2 && iszero(f.coefficients[2:3]) && iszero(f.residuals) && iszero(f.σ)
+    # with an intercept, data with exact means: x = [1, 2, 3, 6] (mean 3), y = 5 + x/2
+    x = T[1, 2, 3, 6]; x2 = T[2, 0, 1, 1]
+    X = [x x2]; y = 5 .+ x ./ 2
+    λ = T(0.5)
+    @test level(λ, 4) < sqrt(sum(abs2, Float64.(x) .- 3))
+    f = @test_logs (:warn, UNCERTIFIED) sqrt_lasso(X, y, λ, cyc(T); intercept = true, standardize_x = false)
+    @test !f.result.converged && isnan(f.result.gap) && f.result.passes < 2000
+    @test f.coefficients == T[0.5, 0] && f.intercept == 5 && iszero(f.residuals) && iszero(f.σ)
+    # a generic exact fit from zero: certified (checked independently, where the residual is not zero) or not
+    # converged; a converged fit has to pass the check
+    for (ic, st) in COMBOS
+      X, _ = problem(T, 82, 60, 8)
+      y = X[:, 1:2] * T[1.5, -2.0]
+      λ = T(0.1)
+      f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      f.result.converged ? check_certified(f, X, y, λ, ic, st; exact_fit = true, tight = false) : @test isnan(f.result.gap)
+    end
+  end
+
+  @testset "near-zero residuals, $T" for T in (Float32, Float64)
+    # noise about 1e-10 relative to the signal: certified (checked independently) or not converged
+    for (ic, st) in COMBOS
+      X, _ = problem(T, 91, 60, 8)
+      signal = X[:, 1:3] * T[2, -1.5, 1]
+      noise = randn(Xoshiro(92), T, 60)
+      y = signal .+ T(1e-10) .* noise .* maximum(abs, signal)
+      λ = T(0.1)
+      f = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      f.result.converged ? check_certified(f, X, y, λ, ic, st; exact_fit = T === Float32, tight = false) : @test isnan(f.result.gap)
+    end
+  end
+
+  @testset "nonconvergence is reported: maxpasses = 1, $T" for T in (Float32, Float64)
+    n, p = 60, 8
+    X, y = problem(T, 101, n, p)
+    for (ic, st) in COMBOS
+      λ = T(0.1 * lambda_max(X, y, ic, st))
+      f = @test_logs (:warn, CAPPED) sqrt_lasso(X, y, λ, cyc(T; maxpasses = 1); intercept = ic, standardize_x = st)
+      @test !f.result.converged && f.result.passes == 1 && isnan(f.result.gap)
+      @test all(isfinite, f.coefficients) && isfinite(f.intercept) && isfinite(f.σ) && all(isfinite, f.residuals)
+      # the same problem with the default cap and a tight tolerance: a different, converged result
+      g = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      T === Float64 && @test g.result.converged && all(isfinite, g.coefficients)
+    end
+  end
+
+  @testset "a constant response with an intercept, $T" for T in (Float32, Float64)
+    n, p = 40, 5
+    X, _ = problem(T, 111, n, p)
+    for c in (T(3), T(0.1), T(-7.25)), st in (false, true)
+      y = fill(c, n)
+      f = sqrt_lasso(X, y, T(0.2), cyc(T); intercept = true, standardize_x = st)
+      @test iszero(f.coefficients) && f.intercept == c && f.result.converged && iszero(f.σ)
+      @test f.result.gap == 0 && f.result.passes == 1 && iszero(f.residuals)
+    end
+    # the minimizer is the same point for these solver settings, and ProximalSolvers certifies it where the
+    # settings let the first full pass meet the change test; with maxpasses = 0, or tol = 0, converged is false
+    y = fill(T(3), n)
+    for solver in (CDSolver(order = :cyclic, momentum = false, maxpasses = 0),
+                   CDSolver(order = :cyclic, momentum = false, tol = 0.0, maxpasses = 2))
+      f = quiet(() -> sqrt_lasso(X, y, T(0.2), solver; intercept = true))
+      @test !f.result.converged && isnan(f.result.gap)
+      @test iszero(f.coefficients) && f.intercept == 3 && iszero(f.σ) && iszero(f.residuals)
+    end
+  end
+
+  @testset "a zero design with a response outside the range of the certificate, Float64" begin
+    # the minimizer is β = 0 (β₀ = 0 without an intercept) and the stored point is that one, but a response of scale
+    # 2⁻⁵⁰⁰ has Σr̂² below n 2⁻⁹⁶⁹: the certificate is undefined and the run stops without one
+    X0 = zeros(4, 1)
+    for c in (1.0, 2.0^-500)
+      y = c .* [-1.0, 1.0, -1.0, 1.0]
+      f = quiet(() -> sqrt_lasso(X0, y, 0.1, cyc(Float64)))
+      @test iszero(f.coefficients) && f.intercept == 0 && f.σ == c
+      @test f.result.converged == (c == 1.0) && (c == 1.0 || isnan(f.result.gap))
+    end
+    f = @test_logs (:warn, UNCERTIFIED) sqrt_lasso(X0, 2.0^-500 .* [-1.0, 1.0, -1.0, 1.0], 0.1, cyc(Float64))
+    @test f.result.passes < 2000
+  end
+
+  @testset "claim (b) does not apply where the back-map underflows (Float64)" begin
+    # columns of ±1e300 and a response of size 1e-100: the standardized coefficient θ is about 7e-101 and
+    # θ/s about 7e-401, below the range of Float64, so β is stored as 0. ProximalSolvers certifies θ for the
+    # transformed problem (claim (a) holds), and the stored point is far from the minimum in the original
+    # coordinates: the raw-data gap is not below 1e-4 + ω, and claim_b_domain excludes the case
+    X = reshape([-1e300, 1e300, -1e300, 1e300], 4, 1)
+    y = 1e-100 .* [-1.0, 1.0, -0.5, 0.5]
+    λ = 0.1
+    f = quiet(() -> sqrt_lasso(X, y, λ, cyc(Float64)))
+    θ = f.result.minimizer
+    @test f.result.converged && θ[1] != 0 && iszero(f.coefficients) && iszero(f.intercept)
+    d = transformed(X, y, false, true)
+    a = dual_gap(d.Z, d.ỹ, 0, θ, level(λ, 4); intercept = false, standardize = false)
+    @test a !== nothing && a.gap <= 1e-4
+    b = dual_gap(X, y, f.intercept, f.coefficients, sqrt(BigFloat(4)) * BigFloat(λ);
+                 intercept = false, standardize = true, eps_T = eps(Float64), pre = true)
+    @test b.gap > 1e-4 + b.ω && b.gap > 1
+    @test !claim_b_domain(X, y, f, λ)
+  end
+
+  @testset "claim (b) is not asserted outside claim_b_domain: two more fixtures (Float64)" begin
+    # a scaled entry that underflows: X[2]/s is about 1.4e-408 and is stored as 0 in Z, below floatmin
+    X = reshape([1e308, 1e-100, -1e308, 0.0], 4, 1)
+    y = [1.0, 2.0, -1.0, -2.0]
+    f = quiet(() -> sqrt_lasso(X, y, 1.0, cyc(Float64)))
+    d = HDM.preprocess(X, y, false, true)
+    unrounded = BigFloat(X[2]) / BigFloat(d.s[1])
+    @test iszero(d.Z[2]) && 0 < unrounded < BigFloat(floatmin(Float64))
+    @test !claim_b_domain(X, y, f, 1.0)
+    @test f.result.converged ? f.result.gap <= 1e-4 : isnan(f.result.gap)      # as ProximalSolvers reports
+    # a normal level from a subnormal Float64(λ): λ = 2⁻¹⁰²⁸ + 0.49·2⁻¹⁰⁷⁴ converts to 2⁻¹⁰²⁸, a relative error of
+    # about 7e-15, above the η_Λ = 4·2⁻⁵³ of the derivation, while the Float64 level 64 Float64(λ) = floatmin is normal
+    λ = BigFloat(2)^-1028 + BigFloat("0.49") * BigFloat(2)^-1074
+    Xl, yl = zeros(4096, 1), repeat([-1.0, 1.0], 2048)
+    f = quiet(() -> sqrt_lasso(Xl, yl, λ, cyc(Float64)))
+    lvl = level(λ, 4096)
+    exact = sqrt(BigFloat(4096)) * λ
+    @test Float64(λ) < floatmin(Float64) && lvl >= floatmin(Float64)
+    @test abs(BigFloat(lvl) - exact) / exact > 4 * BigFloat(2)^-53
+    @test !claim_b_domain(Xl, yl, f, λ) && iszero(f.coefficients)
+  end
+
+  @testset "why claim (b) is not asserted for Float32: cancellation within the input ranges" begin
+    # Float32 fixtures of a review: inputs in [2⁻⁴⁰, 2⁴⁰] and λ = 2²⁰, with a certified fit of normal coefficient
+    # 4.9303807f-32 (standardize_x = false, cyclic order), whose stored residual or intercept is a subnormal
+    # number with a large relative error (the premise of ω is a relative error at most eps(Float32)/2). The
+    # coefficient is fixed here, so that the facts do not depend on the solver. claim_b_domain is false for Float32.
+    λ = 2.0^20
+    β = Float32[4.9303807f-32]
+    X = reshape(Float32[2^40, 0, Float32(1.01) * Float32(2)^-40], 3, 1)
+    y = Float32[2^-40, Float32(1 / (sqrt(3) * λ)), 0]
+    r = X * β
+    r .= y .- zero(Float32) .- r                       # as sqrt_lasso forms the residuals
+    exact = BigFloat(y[3]) - BigFloat(X[3]) * BigFloat(β[1])
+    @test 0 < abs(r[3]) < floatmin(Float32) && abs(BigFloat(r[3]) - exact) / abs(exact) > 1e-3
+    X2 = reshape(Float32[2^40, -2^40, Float32(1.01) * Float32(2)^-40, 0], 4, 1)
+    B = Float32(1 / (sqrt(2) * λ))
+    y2 = Float32[2^-40, -2^-40, B, -B]
+    d = HDM.preprocess(X2, y2, true, false)
+    β₀ = HDM.intercept_from_means(d.ȳ, d.x̄, β)
+    @test 0 < abs(β₀) < floatmin(Float32)
+    stored = (; coefficients = β, result = (; minimizer = β))
+    @test !claim_b_domain(X, y, stored, λ) && !claim_b_domain(X2, y2, stored, λ)
+  end
+
+  @testset "Float64 fixtures that broke the first stated bounds satisfy the corrected ones" begin
+    # a column mean below 2⁻⁸⁰ and a scaled entry below 2⁻¹²⁰, with inputs inside the domain: the corrected
+    # bounds (2⁻¹⁸² for means, 2⁻²²⁴ for entries of Z) hold. The first fixture is a near-exact fit (the response is in
+    # the span of the design up to rounding), where the dual direction of the residual is rounding noise and the
+    # independent gap is not informative; only the domain and the bounds are asserted for both fixtures
+    a = 2.0^-40
+    X = reshape([nextfloat(a), -a, 0.0], 3, 1)
+    y = [1.0, -1.0, 0.0]
+    f = quiet(() -> sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true))
+    μ = sum(BigFloat.(X)) / 3
+    @test 2.0^-102 < μ < 2.0^-80
+    @test claim_b_domain(X, y, f, 0.1) && margin_bounds(X, y, f, true, true)
+    # the second fixture is a bounds test: a scaled entry below 2⁻¹²⁰ next to entries of size 2⁴⁰
+    X = reshape([2.0^40, -2.0^40, nextfloat(a), -a, 0.0], 5, 1)
+    y = [1.0, -1.0, 1.0, -1.0, 0.0]
+    f = quiet(() -> sqrt_lasso(X, y, 0.1, cyc(Float64); intercept = true))
+    z = HDM.preprocess(X, y, true, true).Z[5]
+    @test 2.0^-224 < abs(z) < 2.0^-120
+    @test claim_b_domain(X, y, f, 0.1) && margin_bounds(X, y, f, true, true)
+  end
+
+  @testset "the independent gap is Inf, not negative, where the dual value is not positive" begin
+    # the point that a run of one cyclic pass on a 3 × 2 design at λ = 1e-5 returned (fixed here, so that the test
+    # does not depend on the solver): D = uᵀy < 0, where (P - D)/D bounds nothing and would be negative
+    X = [-0.6570368881174425 1.2438338374014866; -0.8408751875192206 -0.3930342766757361; -0.4228327963595001 0.5047040065705481]
+    y = [-3.347462601798711, -0.633491262245945, -0.808003710231016]
+    β = [2.3328834555906037, -1.3745674525556815]
+    b = dual_gap(X, y, 0.0, β, sqrt(BigFloat(3)) * BigFloat(1e-5); intercept = false, standardize = false)
+    @test b !== nothing && b.D < 0 && b.P > 0 && b.gap == Inf && !(b.gap <= 1e-4)
+    # at 20 sampled final iterates of one-pass runs the independent gap is not negative (beyond the rounding of
+    # the 256-bit evaluation)
+    for seed in 1:20
+      Xs, ys = randn(Xoshiro(seed), 3, 2), randn(Xoshiro(100 + seed), 3)
+      f = quiet(() -> sqrt_lasso(Xs, ys, 1e-5, CDSolver(order = :cyclic, momentum = false, maxpasses = 1); standardize_x = false))
+      g = dual_gap(Xs, ys, 0.0, f.coefficients, sqrt(BigFloat(3)) * BigFloat(1e-5); intercept = false, standardize = false)
+      @test g === nothing || g.gap >= -1e-60
+    end
+  end
+
+  @testset "historical rows: a zero response and a zero design, $T" for T in (Float32, Float64)
+    # (ported from the earlier tests of degenerate data, adapted to the contract of ProximalSolvers)
+    n, p = 60, 8
+    X, y = problem(T, 121, n, p)
+    # a zero response: ỹ = 0 for either keyword (a constant response with an intercept), which ProximalSolvers
+    # certifies at θ = 0 in one pass with gap 0: β = 0, β₀ = 0, σ = 0, converged
+    for (ic, st) in COMBOS
+      f = sqrt_lasso(X, zeros(T, n), T(0.3), cyc(T); intercept = ic, standardize_x = st)
+      @test iszero(f.coefficients) && iszero(f.intercept) && f.result.converged && f.result.gap == 0
+      @test f.result.passes == 1 && iszero(f.σ) && iszero(f.residuals)
+    end
+    # a zero design: all columns are flat, the solver keeps β at 0 and certifies it; with an intercept the fit is
+    # the mean of the response and σ the root mean square of y - ȳ, without one σ is that of y
+    X0 = zeros(T, n, p)
+    for (ic, st) in COMBOS
+      f = quiet(() -> sqrt_lasso(X0, y, T(0.3), cyc(T); intercept = ic, standardize_x = st))
+      @test iszero(f.coefficients) && f.result.converged && f.result.gap <= 1e-4
+      setprecision(BigFloat, 256) do
+        yb = BigFloat.(y)
+        ȳ = ic ? sum(yb) / n : zero(BigFloat)
+        @test abs(BigFloat(f.intercept) - ȳ) <= 8 * (n + 4) * BigFloat(eps(T)) * maximum(abs, yb)
+        rms = sqrt(sum(abs2, yb .- ȳ) / n)
+        @test abs(BigFloat(f.σ) - rms) <= 8 * (n + 4) * BigFloat(eps(T)) * rms
+      end
+      @test f.residuals == y .- f.intercept
+    end
+    # a zero response and a zero design together
+    f = sqrt_lasso(X0, zeros(T, n), T(0.3), cyc(T); intercept = true)
+    @test iszero(f.coefficients) && iszero(f.intercept) && f.result.converged && iszero(f.σ)
+    # a zero column among others has coefficient 0 (its scale is 0), with a certified fit of the rest
+    Xz = copy(X); Xz[:, 3] .= 0
+    for (ic, st) in COMBOS
+      λ = T(0.3 * lambda_max(Xz, y, ic, st))
+      f = quiet(() -> sqrt_lasso(Xz, y, λ, cyc(T); intercept = ic, standardize_x = st))
+      @test iszero(f.coefficients[3])
+      f.result.converged ? check_certified(f, Xz, y, λ, ic, st) : @test isnan(f.result.gap)
+    end
+  end
+
+  @testset "errors" begin
+    n, p = 40, 5
+    X, y = problem(Float64, 131, n, p)
+    # a level that is not positive and finite: an HDM ArgumentError that names the contract and `lasso`
+    for λ in (0.0, -0.0, -1.0, -1e-300, NaN, Inf, -Inf, 0, -1, 0f0, big"0.0", -1 // 2)
+      err = try sqrt_lasso(X, y, λ); nothing catch e e end
+      @test err isa ArgumentError
+      msg = sprint(showerror, err)
+      @test occursin("sqrt_lasso: λ must be positive and finite", msg) && occursin("`lasso`", msg)
+    end
+    X32, y32 = problem(Float32, 132, n, p)
+    @test_throws ArgumentError sqrt_lasso(X32, y32, 0.0f0)
+    @test_throws ArgumentError sqrt_lasso(X32, y32, NaN32)
+    # a level that is not representable in Float64 (the staged conversion): λ is converted to Float64 first, and an
+    # HDM error follows where Float64(λ) or the Float64 product √n λ is not finite and positive
+    @test_throws ArgumentError sqrt_lasso(X, y, big"1e-400")
+    err = try sqrt_lasso(X, y, big"1e-400"); nothing catch e e end
+    @test occursin("sqrt_lasso: the level", sprint(showerror, err)) && occursin("not a finite positive Float64", sprint(showerror, err))
+    # Float64(λ) is 0 for this λ, although Float64(10λ) is not: with n = 100 the mathematical level 10λ would
+    # convert, but the conversion is staged
+    @test Float64(big"1e-324") == 0 && Float64(10 * big"1e-324") > 0
+    X100, y100 = problem(Float64, 134, 100, 3)
+    err = try sqrt_lasso(X100, y100, big"1e-324", cyc(Float64)); nothing catch e e end
+    @test err isa ArgumentError && occursin("sqrt_lasso: the level √n λ for n = 100", sprint(showerror, err))
+    # a finite Float64 λ whose product overflows is refused by HDM too, with its own message
+    err = try sqrt_lasso(X, y, 1e308); nothing catch e e end
+    @test err isa ArgumentError && occursin("sqrt_lasso: the level √n λ for n = 40", sprint(showerror, err)) &&
+          !occursin("penalty lambda", sprint(showerror, err))
+    # √n λ not representable in T: the error of ProximalSolvers, passed on (λ = 1e-47 and n = 40 gives 6e-47,
+    # which rounds to 0 in Float32; 1e46 overflows)
+    for T in (Float32,), λ in (1e-47, 1e46)
+      Xs, ys = problem(T, 133, n, p)
+      @test T(sqrt(Float64(n)) * λ) in (zero(T), T(Inf))
+      for st in (false, true)
+        err = try sqrt_lasso(Xs, ys, λ; standardize_x = st); nothing catch e e end
+        @test err isa ArgumentError
+        @test occursin("penalty lambda is not representable without overflow or underflow in Float32", sprint(showerror, err))
+      end
+    end
+    # wrong types: nothing is converted
+    for args in ((X32, y, 0.1), (X, y32, 0.1), (Int.(round.(X)), y, 0.1), (view(X, :, 1:3), y, 0.1),
+                 (X, view(y, 1:n), 0.1), (X, reshape(y, n, 1), 0.1), (X, y, "0.1"), (X, y, 0.1 + 0im),
+                 (X, y, 0.1, :cyclic), (X, y, nothing))
+      err = try sqrt_lasso(args...); nothing catch e e end
+      @test err isa ArgumentError && occursin("sqrt_lasso needs X::Matrix{T}, y::Vector{T}", sprint(showerror, err))
+    end
+    # keywords that are not Bool; the message of the shared check names the keyword
+    for bad in (1, 0, "true", nothing, missing, 1.0)
+      for kw in (:intercept, :standardize_x)
+        err = try sqrt_lasso(X, y, 0.1; (kw => bad,)...); nothing catch e e end
+        @test err isa ArgumentError && occursin("the keyword $kw must be true or false", sprint(showerror, err))
+      end
+    end
+    # shapes
+    @test_throws DimensionMismatch sqrt_lasso(X, y[1:end-1], 0.1)
+    @test_throws DimensionMismatch sqrt_lasso(zeros(0, 3), zeros(0), 0.1)
+    @test_throws DimensionMismatch sqrt_lasso(zeros(5, 0), zeros(5), 0.1)
+    for ic in (false, true), st in (false, true)
+      @test_throws DimensionMismatch sqrt_lasso(X, y[1:end-1], 0.1; intercept = ic, standardize_x = st)
+    end
+    # nonfinite data
+    Xn = copy(X); Xn[3, 2] = NaN
+    yn = copy(y); yn[4] = Inf
+    for ic in (false, true), st in (false, true)
+      @test_throws ArgumentError sqrt_lasso(Xn, y, 0.1; intercept = ic, standardize_x = st)
+      @test_throws ArgumentError sqrt_lasso(X, yn, 0.1; intercept = ic, standardize_x = st)
+    end
+    err = try sqrt_lasso(Xn, y, 0.1; intercept = true); nothing catch e e end
+    @test occursin("column 2 of X has a non-finite entry", sprint(showerror, err))
+    # a design whose scale underflows to zero while it is not all zeros
+    @test_throws ArgumentError sqrt_lasso(reshape([5e-324; zeros(39)], :, 1), y, 0.1)
+  end
+
+  @testset "conventions: non-mutation, no aliasing, StatsAPI, show, $T" for T in (Float32, Float64)
+    n, p = 60, 8
+    X, y = problem(T, 141, n, p)
+    # historical row (T12): the fit does not write to its arguments and does not return them or reference them
+    for (ic, st) in COMBOS
+      Xm, ym = copy(X), copy(y)
+      f = quiet(() -> sqrt_lasso(Xm, ym, T(0.3), cyc(T); intercept = ic, standardize_x = st))
+      @test Xm == X && ym == y
+      fields = (f.coefficients, f.residuals, f.result.minimizer)
+      @test !any(a -> a === Xm || a === ym || Base.mightalias(a, Xm) || Base.mightalias(a, ym), fields)
+      @test !Base.mightalias(f.coefficients, f.residuals)
+      # the fit is not changed by later changes of the inputs
+      kept = (copy(f.coefficients), copy(f.residuals), f.intercept, f.σ)
+      Xm .+= 1; ym .+= 1
+      @test (f.coefficients, f.residuals, f.intercept, f.σ) == kept
+    end
+
+    λ = T(0.3 * lambda_max(X, y, true, true))
+    fit = quiet(() -> sqrt_lasso(X, y, λ, cyc(T); intercept = true, standardize_x = true))
+    b = coef(fit)
+    @test b isa Vector{T} && b == [fit.intercept; fit.coefficients] && length(b) == p + 1
+    @test residuals(fit) === fit.residuals && nobs(fit) == n && nobs(fit) isa Int
+    @test dof(fit) == count(!iszero, fit.coefficients) + 1 && dof(fit) isa Int
+    @test deviance(fit) == sum(abs2, fit.residuals) && deviance(fit) isa T
+    @test predict(fit, X) isa Vector{T} && predict(fit, X) == X * fit.coefficients .+ fit.intercept
+    @test predict(fit, X) + residuals(fit) ≈ y rtol = 8 * (p + 4) * eps(T)
+    Xnew = randn(Xoshiro(142), T, 7, p)
+    @test predict(fit, Xnew) == Xnew * fit.coefficients .+ fit.intercept
+    @test predict(fit, zeros(T, 0, p)) == T[]
+    @test_throws DimensionMismatch predict(fit, randn(Xoshiro(3), T, 7, p - 1))
+    @test_throws MethodError predict(fit, randn(Xoshiro(3), T, p))
+    # σ is the root mean square of the residuals, 0 when they are all zero
+    @test fit.σ ≈ sqrt(sum(abs2, Float64.(fit.residuals)) / n) rtol = 8 * (n + 4) * eps(T)
+    # without an intercept: coef is the coefficient vector itself, dof counts no intercept
+    f0 = quiet(() -> sqrt_lasso(X, y, T(0.3 * lambda_max(X, y, false, true)), cyc(T)))
+    @test coef(f0) === f0.coefficients && dof(f0) == count(!iszero, f0.coefficients)
+    @test predict(f0, X) == X * f0.coefficients
+    # show, both certificate states
+    s = sprint(show, f0)
+    nz = count(!iszero, f0.coefficients)
+    @test startswith(s, "SqrtLassoSolution: $p coefficients, $nz nonzero, λ = $(f0.λ), σ = $(f0.σ), $n observations;")
+    @test occursin("duality certificate of the transformed problem: ", s) && count(==('\n'), s) == 1
+    if f0.result.converged
+      @test occursin("duality certificate of the transformed problem: met (relative gap at most $(f0.result.gap)) after $(f0.result.passes) passes", s)
+      @test !occursin("not met", s)
+    end
+    @test s == string(f0) == repr(MIME("text/plain"), f0)
+    @test occursin("intercept = $(fit.intercept), σ = ", sprint(show, fit))
+    stopped = @test_logs (:warn, CAPPED) sqrt_lasso(X, y, T(0.3 * lambda_max(X, y, false, true)) / 4, cyc(T; maxpasses = 1))
+    @test occursin("duality certificate of the transformed problem: not met after 1 passes", sprint(show, stopped))
+  end
+
+end
+
+# a summary of the margin of ω in the observed differences of the two gaps (the ratio of the observed
+# difference to the allowance); printed once, not asserted beyond the bound itself
+isempty(margins) || println("sqrt_lasso: largest observed (gap_b - gap_a)/ω = ", maximum(margins), " over ", length(margins), " certified fits; ", count(isequal(0.0), margins), " with no difference")
+
+end

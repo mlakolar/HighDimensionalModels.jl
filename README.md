@@ -4,7 +4,8 @@
 [![CI](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
-The package has one estimator, the Gaussian lasso at a single penalty level:
+The package fits the Gaussian lasso at a single penalty level, `lasso` (with the elastic net through the
+keyword `alpha`), and the square-root lasso, `sqrt_lasso`. The Gaussian lasso solves
 
 ```
 minimize over β:   ‖y - Xβ‖² / (2n) + λ ‖β‖₁ ,      n = size(X, 1).
@@ -67,7 +68,7 @@ throw an `ArgumentError` or a `DimensionMismatch`; the checks are described in t
 the documentation).
 
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
-cross-validation; weighted, adaptive, feasible, scaled and square-root lasso; nonconvex penalties;
+cross-validation; weighted, adaptive, feasible and scaled lasso; nonconvex penalties;
 generalized linear models; group, sparse-group and multitask regression;
 quantile regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient
 models; post-selection inference; integer, sparse and view designs.

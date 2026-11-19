@@ -177,6 +177,48 @@ function lasso_cases!(catalog)
     certify = (p, s, out) -> elastic_net_certificate(s, out))
 end
 
+# ---- square-root lasso (#223) ----
+
+# The target of `sqrt_lasso/dense-standardized`: the relative gap that ProximalSolvers' certificate
+# proves, which is also what its certificate here needs to decide whether the rounding uncertainty
+# could change the verdict
+const SQRT_LASSO_TARGET = 1e-4
+
+# The smallest λ with β = 0 optimal for the normalized square-root lasso on the centred and scaled
+# data, maxⱼ |zⱼ'ỹ|/(√n ‖ỹ‖), with the sums in a fixed order
+function sqrt_lambda_max(Z, ỹ)
+  top = 0.0
+  for j in axes(Z, 2)
+    s = 0.0
+    for i in axes(Z, 1)
+      s += Z[i, j] * ỹ[i]
+    end
+    top = max(top, abs(s))
+  end
+  norm2 = 0.0
+  for v in ỹ
+    norm2 += v * v
+  end
+  top / (sqrt(Float64(size(Z, 1))) * sqrt(norm2))
+end
+
+function sqrt_lasso_cases!(catalog)
+  # The raw inputs of the scenario, fit with an intercept and standardization at λ = 0.3 λmax of the
+  # centred and scaled problem, with a seeded solver of the package's defaults otherwise. The certificate
+  # reads the stored intercept and coefficients (coef(out) has p + 1 entries here).
+  function sqrt_inputs(p; ratio = 0.3)
+    Z, r = standardized(p.X, p.y)
+    λ = ratio * sqrt_lambda_max(Z, r)
+    (; X = p.X, y = p.y, λ, solver = CDSolver(; rng = solver_rng()), levels = [λ])
+  end
+  sqrt_call(s) = sqrt_lasso(s.X, s.y, s.λ, s.solver; intercept = true, standardize_x = true)
+  sqrt_certificate(s, out) = sqrt_lasso_gap_standardized(s.X, s.y, out.intercept, out.coefficients, s.λ; target = SQRT_LASSO_TARGET)
+
+  add_case!(catalog, "lasso", "sqrt_lasso", "dense-standardized"; scenario = "ls-200x50",
+    measure = MEASURE.gap, target = SQRT_LASSO_TARGET,
+    build = p -> sqrt_inputs(p), call = sqrt_call, certify = (p, s, out) -> sqrt_certificate(s, out))
+end
+
 function control_cases!(catalog)
   # One pass of coordinate descent is expected to leave a relative gap above 1e-8
   # on this scenario: this case must end target_missed, with no timing-eligible
@@ -198,6 +240,7 @@ end
 function all_cases()
   catalog = CaseSpec[]
   lasso_cases!(catalog)
+  sqrt_lasso_cases!(catalog)
   control_cases!(catalog)
   ids = [c.meta.id for c in catalog]
   allunique(ids) || error("duplicate case ids")

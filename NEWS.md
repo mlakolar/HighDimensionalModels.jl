@@ -34,7 +34,7 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   and StatsAPI. It needs the development `master` branches of ProximalBase (0.6 series) and
   ProximalSolvers 0.3.2 and does not resolve against the registry.
 - Removed: paths, screening and cross-validation; weights;
-  the weighted, adaptive, feasible, scaled and square-root lasso; nonconvex
+  the weighted, adaptive, feasible and scaled lasso; nonconvex
   penalties; generalized linear models; group, sparse-group and multitask regression; quantile
   regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient models;
   post-selection inference; the general coordinate-descent interfaces and the deprecated names;
@@ -42,3 +42,26 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
 - The previous package, version `0.1.0` (unreleased), with its tests, documentation, examples and
   the changelog that this file held, is preserved on the branch `legacy/full` and the tag
   `archive/pre-minimal-core/master`.
+
+## Square-root lasso (#223)
+
+- **Breaking.** The square-root lasso is restored as `sqrt_lasso(X, y, λ, solver = CDSolver();
+  intercept = false, standardize_x = true)`, with a normalized penalty level. The earlier function
+  minimized `‖y - β₀ - Xβ‖ + λ Σⱼ ωⱼ|βⱼ|`. This one minimizes `‖y - β₀1 - Xβ‖/√n + λ‖θ‖₁`, with `θ` the
+  coefficients in the coordinates of the penalty (`θⱼ = sⱼβⱼ` with `standardize_x = true`, as for `lasso`),
+  so the same estimate needs `λ = λ_earlier/√n`: an earlier `sqrt_lasso(X, y, 20.0)` on `n = 400` rows is now
+  `sqrt_lasso(X, y, 1.0)`. The noise estimate `σ` of the result is now `‖r‖/√n` for the residuals `r`, not their
+  sample standard deviation. The defaults, `standardize_x = true` and `intercept = false`, are those of the
+  earlier function.
+- It returns a `SqrtLassoSolution` (`coefficients`, `intercept`, `hasintercept`, `residuals`, `λ`, `σ` and the
+  unchanged ProximalSolvers result) with the StatsAPI methods `coef`, `predict`, `residuals`, `nobs`, `dof` and
+  `deviance`. The solve is ProximalSolvers' square-root coordinate descent on `SqrtLeastSquaresLoss` at the
+  level `√n λ`, in `Float64`, on the centred and scaled data of `lasso`. `λ` must be positive and finite
+  (`lasso` fits `λ = 0`). The level is converted to `Float64` before the product with `√n`, which `sqrt_lasso`
+  refuses with its own error where `Float64(λ)` or the product is not finite and positive, and the product
+  must be representable in the element type (ProximalSolvers' error is passed on).
+- `fit.result.converged` and `fit.result.gap` are ProximalSolvers' duality certificate of the transformed
+  problem, unchanged: `converged = true` means that it proved a relative gap of at most `1e-4`, and a stop
+  without a certificate (for example at an exact fit, where the residual is zero) or at `maxpasses` reports
+  `converged = false`. The accuracy in the original coordinates is not certified; the documentation page
+  gives the sizes of the rounding terms and a duality gap that a user can compute from the raw data.
