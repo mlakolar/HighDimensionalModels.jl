@@ -4,8 +4,8 @@
 [![CI](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/mlakolar/HighDimensionalModels.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 [![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
-The package fits the Gaussian lasso at a single penalty level, `lasso`, and the square-root lasso,
-`sqrt_lasso`. The Gaussian lasso solves
+The package fits the Gaussian lasso at a single penalty level, `lasso` (with the elastic net through the
+keyword `alpha`), and the square-root lasso, `sqrt_lasso`. The Gaussian lasso solves
 
 ```
 minimize over β:   ‖y - Xβ‖² / (2n) + λ ‖β‖₁ ,      n = size(X, 1).
@@ -61,14 +61,15 @@ conditioning and the rounding of the working type, so the deviations have to be 
 ## Supported inputs
 
 `lasso(X, y, λ, solver = CDSolver())` takes `X::Matrix{T}` and `y::Vector{T}` with `T` equal to
-`Float32` or `Float64`, a real `λ` that is finite, nonnegative and representable in `T`, and an
-optional `CDSolver` from ProximalSolvers (re-exported). Other argument types throw an
-`ArgumentError`; nothing is converted. The other checks are those of ProximalBase and
-ProximalSolvers, and their errors are passed on.
+`Float32` or `Float64`, a real `λ`, and an optional `CDSolver` from ProximalSolvers (re-exported).
+Other argument types throw an `ArgumentError`, and `X` and `y` are not converted. Invalid inputs
+throw an `ArgumentError` or a `DimensionMismatch`; the checks are described in the docstring of
+`lasso`. The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net (see the lasso page of
+the documentation).
 
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
-cross-validation; weighted, adaptive, feasible and scaled lasso; the elastic net and
-nonconvex penalties; generalized linear models; group, sparse-group and multitask regression;
+cross-validation; weighted, adaptive, feasible and scaled lasso; nonconvex penalties;
+generalized linear models; group, sparse-group and multitask regression;
 quantile regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient
 models; post-selection inference; integer, sparse and view designs.
 

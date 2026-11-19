@@ -1,7 +1,7 @@
 # HighDimensionalModels.jl
 
-HighDimensionalModels fits the Gaussian lasso at a single penalty level, [`lasso`](@ref), and the
-square-root lasso, [`sqrt_lasso`](@ref). The Gaussian lasso solves
+HighDimensionalModels fits the Gaussian lasso at a single penalty level, [`lasso`](@ref) (with the elastic
+net through the keyword `alpha`), and the square-root lasso, [`sqrt_lasso`](@ref). The Gaussian lasso solves
 
 ```math
 \min_{\beta \in \mathbb{R}^p}\ \frac{1}{2n}\lVert y - X\beta\rVert_2^2 + \lambda \lVert \beta \rVert_1 .
@@ -26,9 +26,10 @@ println(count(!iszero, coef(fit)), " nonzero coefficients of ", p)
 println(round.(coef(fit)[1:5]; digits = 2))
 ```
 
-The [lasso page](lasso.md) gives the inputs, the result, how convergence is reported and how to
-check a fit independently. The [square-root lasso page](sqrt_lasso.md) gives the normalized objective of
-`sqrt_lasso`, which differs from the earlier function, and what its certificate covers.
+The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net. The [lasso page](lasso.md) gives
+the inputs, the result, how convergence is reported and how to check a fit independently. The
+[square-root lasso page](sqrt_lasso.md) gives the normalized objective of `sqrt_lasso`, which differs from the
+earlier function, and what its certificate covers.
 
 ## What is not supported
 
@@ -37,8 +38,8 @@ check a fit independently. The [square-root lasso page](sqrt_lasso.md) gives the
   refused with an `ArgumentError`; nothing is converted.
 - An intercept, standardization and observation weights.
 - Penalty paths, screening, continuation and cross-validation.
-- Weighted, adaptive, feasible and scaled lasso; the elastic net and nonconvex
-  penalties; generalized linear models.
+- Weighted, adaptive, feasible and scaled lasso; nonconvex penalties;
+  generalized linear models.
 - Group, sparse-group and multitask regression; quantile regression; SLOPE and knockoffs;
   structured and fused penalties; low-rank and sparse-plus-low-rank models;
   varying-coefficient models; post-selection inference.

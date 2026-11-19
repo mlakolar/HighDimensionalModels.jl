@@ -229,7 +229,7 @@ end
   # and the Float64 report, which adds its own rounding of P (this checks the report, not the bound)
   @test abs(BigFloat(a.P) - Pexact) <= a.eP + 8 * eps(Float64(Pexact)) && a.eP < 1e-60 && a.width < 1e-60
   # a certificate is uncertifiable when the interval of the relative gap contains the target in the
-  # sense value_lo ≤ target < value_hi; it is ok when the true gap, or the whole interval, lies below
+  # sense value_lo ≤ target < value_hi; it is ok when the whole interval lies below
   # the target (a value at most the target) or above it (a value above the target). The data are
   # those of the review: three constant columns, C, 1 and -C, and a column (-1, 1), with
   # β = (1, 1, 1, 0.9) and λ = 0.1, whose gap is set by the intercept β₀ = 0.5 + δ; the error
@@ -368,12 +368,297 @@ if Base.find_package("HighDimensionalModels") !== nothing && get(ENV, "HDM_CERTI
       spec.meta.group == "controls" ? (@test cert.value > spec.meta.target) : (@test cert.value ≤ spec.meta.target)
     end
     # a reproducible run: equal coefficients (and intercepts) from two fresh copies of the prepared inputs
-    @test sort([c.meta.id for c in build_catalog("quick", ["lasso"])]) == ["lasso/lasso/dense", "lasso/lasso/dense-standardized", "lasso/sqrt_lasso/dense-standardized"]
+    @test sort([c.meta.id for c in build_catalog("quick", ["lasso"])]) == ["lasso/elastic_net/dense", "lasso/lasso/dense", "lasso/lasso/dense-standardized", "lasso/sqrt_lasso/dense-standardized"]
     for spec in build_catalog("quick", ["lasso"])
       prepared = spec.build(scenario(spec.meta.scenario, 1))
       a, b = spec.call(deepcopy(prepared)), spec.call(deepcopy(prepared))
       @test coef(a) == coef(b)
     end
+  end
+end
+
+# ---- elastic net (#222) ----
+# Controls for `elastic_net_gap`: the objective
+#   ‖y - β₀1 - Xβ‖²/(2n) + λα Σⱼ sⱼ|βⱼ| + (λ(1 - α)/2) Σⱼ sⱼ²βⱼ²
+# is the lasso on the augmented design [Z; √(nν) I], ν = λ(1 - α), with the divisor n. The
+# reference below computes the dual value of that lasso in Float64, with the options that select
+# the two wrong normalizations (the rows √ν instead of √(nν), and the divisor n + p instead of n):
+# they must give values that differ from the certificate and do not vanish at an optimum.
+
+const EN_TARGET = 1e-6    # the target of lasso/elastic_net/dense (the constant of its case)
+
+soft_threshold(c, t) = sign(c) * max(abs(c) - t, 0.0)
+
+# the primal value on the raw data at the stored (β₀, β), from the definition
+function en_primal(X, y, β₀, β, λ, α)
+  _, s = centered_scaled(X)
+  r = y .- β₀ .- X * β
+  dot(r, r) / (2length(y)) + λ * α * dot(s, abs.(β)) + λ * (1 - α) / 2 * sum(abs2, s .* β)
+end
+
+# The lasso on (Zₐ, yₐ) = ([Z; ρ I], [ỹ; 0]) at θ = sβ with ℓ₁ level λα and the divisor m: its
+# primal value, the dual value (‖yₐ‖² - ‖yₐ - t rₐ‖²)/(2m) at t = min(1, λα/‖Zₐᵀrₐ/m‖∞), and the
+# relative gap. With ρ = √(nν) and m = n (the defaults) this is the elastic net; rows = :unscaled
+# is ρ = √ν, and divisor = :n_plus_p is m = n + p.
+function augmented_reference(X, y, β, λ, α; rows = :sqrt_n, divisor = :n)
+  Z, s = centered_scaled(X)
+  n, p = size(Z)
+  ỹ = y .- mean_of(y)
+  θ = s .* β
+  ν = λ * (1 - α)
+  ρ = rows === :sqrt_n ? sqrt(n * ν) : sqrt(ν)
+  m = divisor === :n ? n : n + p
+  Za = [Z; ρ * Matrix(1.0I, p, p)]
+  ya = [ỹ; zeros(p)]
+  ra = ya - Za * θ
+  a = λ * α
+  P = dot(ra, ra) / (2m) + a * sum(abs, θ)
+  t = box_scale(Za' * ra / m, a)
+  D = (dot(ya, ya) - dot(ya - t * ra, ya - t * ra)) / (2m)
+  (; P, D, t, gap = max(P - D, 0.0) / P)
+end
+
+# An elastic net whose solution (β₀, β) is known by construction: θ = sβ, a dual point θᵣ in the range
+# of Z with Zᵀθᵣ = v + νθ for a subgradient v of λα‖·‖₁ at θ, and y = β₀ + Xβ + nθᵣ. The residual of
+# (β₀, β) is nθᵣ, so that Zᵀ(ỹ - Zθ)/n - νθ = v: the optimality conditions of the objective above.
+function designed_elastic_net(rng; n = 60, p = 8, λ = 0.2, α = 0.5, β₀ = 1.5)
+  X = randn(rng, n, p) .* transpose(0.5 .+ 2 .* rand(rng, p)) .+ transpose(3 .* randn(rng, p))
+  Z, s = centered_scaled(X)
+  β = sparse_vector(rng, p, 3)
+  ν = λ * (1 - α)
+  θ = s .* β
+  θr = dual_with(Z, l1_subgradient(rng, β, λ * α) .+ ν .* θ)
+  y = β₀ .+ X * β .+ n .* θr
+  (; X, y, β, β₀, λ, α, θr, Z, s)
+end
+
+# The elastic net of an orthogonal design with the closed form θⱼ = S(zⱼᵀỹ/n, λα)/(1 + ν): the columns
+# of a Hadamard matrix (n = 8, ZᵀZ = nI) with column scales and means on a grid, whose centred columns
+# are orthogonal. Returns the data and the optimum (β₀, β).
+function orthogonal_elastic_net(λ, α)
+  H2 = [1 1; 1 -1]
+  H = Float64.(kron(H2, kron(H2, H2)))
+  cs = [1.0, 2.0, 0.5, 4.0, 1.5, 3.0, 1.0]
+  X = H[:, 2:8] .* transpose(cs) .+ transpose([3.0, -2.0, 0.5, 1.0, -4.0, 2.0, 0.25])
+  y = [3.0, -1.0, 0.5, 2.0, -2.5, 1.0, 0.25, -0.75] .+ 1.0
+  Z, s = centered_scaled(X)
+  n = size(X, 1)
+  ȳ = mean_of(y)
+  θ = soft_threshold.(Z' * (y .- ȳ) ./ n, λ * α) ./ (1 + λ * (1 - α))
+  β = θ ./ s
+  β₀ = ȳ - dot([mean_of(X[:, j]) for j in axes(X, 2)], β)
+  (; X, y, β, β₀, θ, Z, s)
+end
+
+@testset "Elastic net certificate" begin
+  rng = scenario_rng("certificate-controls-elastic-net", 1)
+
+  # the designed point is optimal: the gap, the dual point and the primal value
+  d = designed_elastic_net(rng)
+  n = size(d.X, 1)
+  ν = d.λ * (1 - d.α)
+  @test all(>(0), d.s) && maximum(abs, sum(d.Z; dims = 1)) < 1e-12
+  c = elastic_net_gap(d.X, d.y, d.β₀, d.β, d.λ, d.α; target = EN_TARGET)
+  @test ok(c) && c.measure === :relative_gap && c.value ≤ TIGHT
+  a = elastic_net_parts(d.X, d.y, d.β₀, d.β, d.λ, d.α)
+  @test a.θ ≈ d.θr atol = 1e-12
+  @test a.t ≈ 1 atol = 1e-12
+  @test a.P ≈ en_primal(d.X, d.y, d.β₀, d.β, d.λ, d.α) rtol = 1e-12
+  @test a.P ≈ augmented_reference(d.X, d.y, d.β, d.λ, d.α).P rtol = 1e-12
+  P0 = a.P
+  # the dual value is that of the lasso on the augmented design with the divisor n, computed independently
+  ref = augmented_reference(d.X, d.y, d.β, d.λ, d.α)
+  @test a.D ≈ ref.D rtol = 1e-12
+  @test ref.gap ≤ TIGHT
+  # a perturbed intercept raises the primal value by δ²/2 and misses the target, in either direction
+  for δ in (1e-2, -1e-2, 0.1)
+    p = elastic_net_parts(d.X, d.y, d.β₀ + δ, d.β, d.λ, d.α)
+    @test p.P - P0 ≈ δ^2 / 2 rtol = 1e-6
+    @test elastic_net_gap(d.X, d.y, d.β₀ + δ, d.β, d.λ, d.α; target = EN_TARGET).value > 1e-6
+  end
+  for scale in (0.5, 1.5)
+    @test elastic_net_gap(d.X, d.y, d.β₀, scale .* d.β, d.λ, d.α; target = EN_TARGET).value > 1e-6
+  end
+  # weak duality and dual feasibility at random points (far from the optimum, and near it), and
+  # agreement with the independent reference
+  for sc in (0.3, 0.3, 0.3, 0.01, 0.01, 0.01)
+    β = d.β .+ sc .* randn(rng, length(d.β))
+    β₀ = d.β₀ + sc * randn(rng)
+    a = elastic_net_parts(d.X, d.y, β₀, β, d.λ, d.α)
+    c = elastic_net_gap(d.X, d.y, β₀, β, d.λ, d.α; target = EN_TARGET)
+    @test ok(c) && a.feasibility <= 1
+    # the point of the augmented problem: |Zᵀ(tθᵣ) - tν sβ| ≤ λα, with the returned θ = tθᵣ
+    @test all(abs.(transpose(d.Z) * a.θ .- a.t * ν .* (d.s .* β)) .<= d.λ * d.α * (1 + 1e-12))
+    @test a.D ≤ a.P && a.D ≤ P0 + 1e-13
+    pr = en_primal(d.X, d.y, β₀, β, d.λ, d.α)
+    @test a.P ≈ pr rtol = 1e-12
+    r = augmented_reference(d.X, d.y, β, d.λ, d.α)
+    @test a.D ≈ r.D rtol = 1e-10 atol = 1e-12
+    @test abs(c.value - (pr - r.D) / pr) <= 1e-9
+    # the versions with the rows √ν, or the divisor n + p, give other primal and dual values (near the
+    # optimum, where the values are not all close to 0 and 1)
+    if sc < 0.1
+      for wrong in ((; rows = :unscaled), (; divisor = :n_plus_p), (; rows = :unscaled, divisor = :n_plus_p))
+        w = augmented_reference(d.X, d.y, β, d.λ, d.α; wrong...)
+        @test abs(w.P - pr) > 1e-2 * pr && abs(w.D - a.D) > 1e-2 * a.D
+      end
+    end
+  end
+
+  # a closed-form optimum on an orthogonal design: the gap is zero to rounding, with the intercept
+  # and coefficients of the closed form; the versions with n + p or without √n do not vanish there
+  for (λ, α) in ((0.3, 0.5), (0.2, 0.2), (0.5, 0.8), (0.1, 0.6))
+    o = orthogonal_elastic_net(λ, α)
+    @test count(!iszero, o.β) >= 1 && count(iszero, o.β) >= 1
+    c = elastic_net_gap(o.X, o.y, o.β₀, o.β, λ, α; target = EN_TARGET)
+    @test ok(c) && c.value ≤ TIGHT
+    @test augmented_reference(o.X, o.y, o.β, λ, α).gap ≤ TIGHT
+    @test en_primal(o.X, o.y, o.β₀, o.β, λ, α) ≈ elastic_net_parts(o.X, o.y, o.β₀, o.β, λ, α).P rtol = 1e-12
+    for wrong in ((; rows = :unscaled), (; divisor = :n_plus_p), (; rows = :unscaled, divisor = :n_plus_p))
+      @test augmented_reference(o.X, o.y, o.β, λ, α; wrong...).gap > 1e-6
+    end
+    # other points have a positive gap and a lower dual value
+    @test elastic_net_gap(o.X, o.y, o.β₀, o.β .+ 0.05, λ, α; target = EN_TARGET).value > 1e-6
+    @test elastic_net_gap(o.X, o.y, o.β₀ + 0.05, o.β, λ, α; target = EN_TARGET).value > 1e-6
+  end
+
+  # for α = 1 (ν = 0) the certificate is that of the lasso with an intercept and scales
+  let d1 = designed_standardized(rng)
+    for (β₀, β) in ((d1.β₀, d1.β), (d1.β₀ + 0.1, d1.β .+ 0.2 .* randn(rng, 8)))
+      e = elastic_net_parts(d1.X, d1.y, β₀, β, d1.λ, 1.0)
+      l = lasso_standardized_parts(d1.X, d1.y, β₀, β, d1.λ)
+      @test e.P ≈ l.P rtol = 1e-14
+      @test e.D ≈ l.D rtol = 1e-12
+      @test e.θ ≈ l.θ rtol = 1e-12
+      @test e.t ≈ l.t rtol = 1e-14
+      @test abs(e.gap - l.gap) <= 1e-12 && l.eP <= e.eP <= 2 * l.eP
+      @test elastic_net_gap(d1.X, d1.y, β₀, β, d1.λ, 1.0; target = EN_TARGET).value ≈
+            lasso_gap_standardized(d1.X, d1.y, β₀, β, d1.λ; target = EN_TARGET).value atol = 1e-12
+    end
+  end
+
+  # at λ ≥ λmax = maxⱼ |zⱼᵀỹ|/(nα) the solution is β = 0, β₀ = ȳ: the gap is zero there and positive below
+  for α in (0.3, 0.5, 0.8)
+    ỹ = d.y .- mean_of(d.y)
+    λmax = maximum(abs.(transpose(d.Z) * ỹ)) / (n * α)
+    for scale in (1.0, 2.0)
+      @test elastic_net_gap(d.X, d.y, mean_of(d.y), zeros(8), scale * λmax, α; target = EN_TARGET).value ≤ TIGHT
+    end
+    @test elastic_net_gap(d.X, d.y, mean_of(d.y), zeros(8), 0.9λmax, α; target = EN_TARGET).value > 1e-4
+  end
+
+  # a column that is constant has scale 0 and is ignored by the penalty
+  Xc = [d.X fill(2.0, n)]
+  @test elastic_net_gap(Xc, d.y, d.β₀, [d.β; 0.0], d.λ, d.α; target = EN_TARGET).value ≤ TIGHT
+  @test ok(elastic_net_gap(Xc, d.y, d.β₀, [d.β; 0.5], d.λ, d.α; target = EN_TARGET))
+
+  # a cancellation in the primal: the error bounds are carried, so that the certificate is not ok
+  Xk, yk = repeat([1e120 1.0 -1e120], 2, 1), zeros(2)
+  @test elastic_net_parts(Xk, yk, 0.0, ones(3), 0.1, 0.5) isa String
+  c = elastic_net_gap(Xk, yk, 0.0, ones(3), 0.1, 0.5; target = EN_TARGET)
+  @test bad(c) && occursin("error bound", c.note)
+
+  # the value is an upper bound of the exact relative gap, computed in rational arithmetic. For
+  # X = (-1, 1)', y = (0.5, 2.5), β₀ = 1.5 (the exact mean offset), λ = 0.1 and α = 1/2 (ν = 1/20) the
+  # objective is (1 - β)²/2 + λα β + (ν/2) β² for β ≥ 0, whose minimum is at β = (1 - λα)/(1 + ν)
+  Xa, ya = reshape([-1.0, 1.0], 2, 1), [0.5, 2.5]
+  λq, αq = Rational{BigInt}(0.1), Rational{BigInt}(0.5)
+  νq = λq * (1 - αq)
+  Pq(β) = (1 - β)^2 / 2 + λq * αq * β + νq / 2 * β^2
+  Pmin = Pq((1 - λq * αq) / (1 + νq))
+  # (the value is not tight away from the optimum: the point built from the residual of β is not the
+  # dual optimum, which the augmented residual is not collinear with, so the bound is tested there and tightness is not)
+  for β in (0.9, 0.8, 0.5, 0.95, 1.2, 19 / 21)
+    βq = Rational{BigInt}(β)
+    exact = (Pq(βq) - Pmin) / Pq(βq)
+    c = elastic_net_gap(Xa, ya, 1.5, [β], 0.1, 0.5; target = EN_TARGET)
+    @test ok(c)
+    @test exact <= BigFloat(c.value)                                  # an upper bound
+    β == 19 / 21 && @test c.value <= TIGHT                            # and zero at the optimum, to rounding
+  end
+  a = elastic_net_parts(Xa, ya, 1.5, [0.8], 0.1, 0.5)
+  @test setprecision(BigFloat, 512) do
+    abs(a.Pb - BigFloat(Pq(Rational{BigInt}(0.8)))) <= a.ePb
+  end
+  @test abs(BigFloat(a.P) - Pq(Rational{BigInt}(0.8))) <= a.eP + 8 * eps(Float64(Pq(Rational{BigInt}(0.8)))) && a.eP < 1e-60 && a.width < 1e-60
+
+  # a certificate is uncertifiable when value_lo ≤ target < value_hi. The data of the lasso control with
+  # three constant columns, C, 1 and -C, and a column (-1, 1), with α = 1/2, λ = 0.1 and β = (1, 1, 1, 19/21),
+  # the optimum for the intercept 0.5 (the slope of the last column is (1 - λα)/(1 + ν) = 19/21): the error
+  # bounds are about 1e-12 relative, since the fitted values cancel C. The intercept β₀ = 0.5 + δ is found by
+  # bisection so that the computed upper bound `gap` is the target
+  C = 1e62
+  Xt, yt, βt = [C 1.0 -C -1.0; C 1.0 -C 1.0], [0.5, 2.5], [1.0, 1.0, 1.0, 19 / 21]
+  gap_at(δ) = elastic_net_parts(Xt, yt, 0.5 + δ, βt, 0.1, 0.5).gap
+  lo, hi = 0.0, 1.0
+  for _ in 1:200
+    mid = (lo + hi) / 2
+    gap_at(mid) < EN_TARGET ? (lo = mid) : (hi = mid)
+  end
+  δ = hi
+  e = elastic_net_parts(Xt, yt, 0.5 + δ, βt, 0.1, 0.5)
+  @test e.gap_lo <= EN_TARGET < e.gap && e.width < 1e-10
+  c = elastic_net_gap(Xt, yt, 0.5 + δ, βt, 0.1, 0.5; target = EN_TARGET)
+  @test bad(c) && occursin("could change the verdict", c.note) && occursin("1.0e-6", c.note)
+  # the same point is decided by a target above or below the bounds
+  @test ok(elastic_net_gap(Xt, yt, 0.5 + δ, βt, 0.1, 0.5; target = 1e-5)) && elastic_net_gap(Xt, yt, 0.5 + δ, βt, 0.1, 0.5; target = 1e-5).value <= 1e-5
+  @test ok(elastic_net_gap(Xt, yt, 0.5 + δ, βt, 0.1, 0.5; target = 1e-7)) && elastic_net_gap(Xt, yt, 0.5 + δ, βt, 0.1, 0.5; target = 1e-7).value > 1e-7
+  @test bad(elastic_net_gap(Xa, ya, 1.5, [0.8], 0.1, 0.5; target = NaN))
+  @test bad(elastic_net_gap(Xa, ya, 1.5, [0.8], 0.1, 0.5; target = 0.0))
+
+  # a column that is not all zeros whose scale is not a normal Float64 is uncertifiable
+  tiny = reshape([5e-324; zeros(99)], :, 1)
+  @test bad(elastic_net_gap(tiny, randn(rng, 100), 0.0, [0.0], 0.1, 0.5; target = EN_TARGET))
+  @test occursin("scale of column 1", elastic_net_gap(tiny, randn(rng, 100), 0.0, [0.0], 0.1, 0.5; target = EN_TARGET).note)
+
+  # element types are converted, and invalid inputs are uncertifiable
+  X32, y32, β32 = Float32.(d.X), Float32.(d.y), Float32.(d.β)
+  @test elastic_net_gap(X32, y32, 1.5f0, β32, Float32(d.λ), Float32(d.α); target = EN_TARGET).value ==
+        elastic_net_gap(Float64.(X32), Float64.(y32), 1.5, Float64.(β32), Float64(Float32(d.λ)), Float64(Float32(d.α)); target = EN_TARGET).value
+  for v in (NaN, Inf)
+    @test bad(elastic_net_gap(d.X, d.y, v, d.β, d.λ, d.α; target = EN_TARGET))
+    @test bad(elastic_net_gap(d.X, d.y, d.β₀, [v; d.β[2:end]], d.λ, d.α; target = EN_TARGET))
+    @test bad(elastic_net_gap(d.X, d.y, d.β₀, d.β, v, d.α; target = EN_TARGET))
+  end
+  for α in (0.0, -0.1, 1.5, NaN, Inf)
+    @test bad(elastic_net_gap(d.X, d.y, d.β₀, d.β, d.λ, α; target = EN_TARGET))
+    @test occursin("α must be", elastic_net_gap(d.X, d.y, d.β₀, d.β, d.λ, α; target = EN_TARGET).note)
+  end
+  @test bad(elastic_net_gap(d.X, d.y, d.β₀, d.β, 0.0, d.α; target = EN_TARGET))
+  @test bad(elastic_net_gap(d.X, d.y, d.β₀, d.β, -0.1, d.α; target = EN_TARGET))
+  @test bad(elastic_net_gap(d.X, d.y[1:end-1], d.β₀, d.β, d.λ, d.α; target = EN_TARGET))
+end
+
+# the fits of the package against the certificate, when the earlier testset loaded it
+if @isdefined(build_catalog) && @isdefined(lasso)
+  @testset "Elastic net certificate: agreement with HighDimensionalModels" begin
+    # a cyclic fit to a tight tolerance, on a design that is wide and one that is dense
+    for (key, ratio, α) in (("ls-200x50", 0.05, 0.5), ("ls-wide-100x400", 0.1, 0.3), ("ls-200x50", 0.1, 0.9))
+      a = scenario(key, 1)
+      Z, r = standardized(a.X, a.y)
+      λmax = lambda_max(Z, r) / α
+      λ = ratio * λmax
+      fit = lasso(a.X, a.y, λ, CDSolver(; order = :cyclic, momentum = false, tol = 1e-12); alpha = α, intercept = true, standardize_x = true)
+      c = elastic_net_gap(a.X, a.y, fit.intercept, fit.coefficients, λ, α; target = EN_TARGET)
+      @test ok(c) && c.value ≤ 1e-9
+      # the primal value of the certificate is the objective of the fit, computed here from the definition
+      @test elastic_net_parts(a.X, a.y, fit.intercept, fit.coefficients, λ, α).P ≈ en_primal(a.X, a.y, fit.intercept, fit.coefficients, λ, α) rtol = 1e-12
+      # λmax = max|zⱼᵀỹ|/(nα): the slopes are zero above it and some are not below it
+      @test all(iszero, lasso(a.X, a.y, 1.01 * λmax, CDSolver(; order = :cyclic, momentum = false, tol = 1e-12); alpha = α, intercept = true, standardize_x = true).coefficients)
+      @test any(!iszero, lasso(a.X, a.y, 0.99 * λmax, CDSolver(; order = :cyclic, momentum = false, tol = 1e-12); alpha = α, intercept = true, standardize_x = true).coefficients)
+    end
+    # the case of the table: it meets its target, and its target is the one used here
+    catalog = build_catalog("quick", ["lasso"], [r"elastic_net"])
+    @test [c.meta.id for c in catalog] == ["lasso/elastic_net/dense"]
+    spec = only(catalog)
+    @test spec.meta.target == EN_TARGET && spec.meta.group == "lasso" && spec.meta.estimator == "elastic_net"
+    problem = scenario(spec.meta.scenario, 1)
+    prepared = spec.build(problem)
+    @test prepared.alpha == 0.5 && prepared.levels == [prepared.λ, 0.5]
+    Z, r = standardized(problem.X, problem.y)
+    @test prepared.λ == 0.1 * lambda_max(Z, r) / 0.5
+    cert = spec.certify(problem, prepared, spec.call(deepcopy(prepared)))
+    @test ok(cert) && string(cert.measure) == spec.meta.measure && cert.value ≤ spec.meta.target
   end
 end
 

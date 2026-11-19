@@ -12,6 +12,7 @@ parallel = [
   "aqua",
   "ci_plan",
   "dependencies",
+  "elastic_net",
   "lasso",
   "lasso_intercept",
   "lasso_reference",

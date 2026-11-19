@@ -17,12 +17,24 @@ residuals, `λ` and the unchanged ProximalSolvers result) with the StatsAPI meth
   `[intercept; coefficients]` with an intercept, `predict` checks the number of columns and adds
   the intercept, and `dof` and `deviance` (StatsAPI) are new. With `standardize_x = true`,
   `fit.result.minimizer` is the vector of the scaled coordinates, not `coefficients`.
+- Elastic net: `lasso(X, y, λ, solver; alpha = 1, intercept = false, standardize_x = false)` minimizes
+  `‖y - β₀1 - Xβ‖² / (2n) + λ(α‖θ‖₁ + (1 - α)‖θ‖²/2)` with `θⱼ = sⱼβⱼ`, for a finite `alpha` with
+  `0 < alpha ≤ 1`; any other value, including one that is not a `Real`, throws an `ArgumentError`.
+  The penalty is ProximalBase's `ElasticNet(λ₁, λ₂)` with `λ₁ = λα` and `λ₂ = λ(1 - α)` computed in
+  the element type of the data, solved by the same `CDSolver` on the same transformed data. An `alpha`
+  that is `1` in that type gives the lasso; one that is `0`, or an ℓ₁ level `λα` that underflows to
+  `0` for `λ > 0`, would be a ridge penalty alone and throws an `ArgumentError` (ridge alone is not
+  supported). `LassoSolution` has a new field `alpha`, placed after `λ`, with the effective
+  `T(alpha)` (`1` for the lasso); `show` prints it when it is below 1. `dof` is the number of nonzero
+  slopes, plus one with an intercept; for `alpha < 1` the number of nonzero slopes is the count that
+  glmnet reports, and the count is not an unbiased estimate. No agreement with glmnet
+  is claimed: glmnet scales `y` internally, which changes the ridge part unless `sd(y) = 1`.
 - The loss and the penalty are ProximalBase's and the solver is ProximalSolvers' `CDSolver`; the
   package contains no optimization code. Runtime dependencies are ProximalBase, ProximalSolvers
   and StatsAPI. It needs the development `master` branches of ProximalBase (0.6 series) and
   ProximalSolvers 0.3.2 and does not resolve against the registry.
 - Removed: paths, screening and cross-validation; weights;
-  the weighted, adaptive, feasible and scaled lasso; the elastic net and nonconvex
+  the weighted, adaptive, feasible and scaled lasso; nonconvex
   penalties; generalized linear models; group, sparse-group and multitask regression; quantile
   regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient models;
   post-selection inference; the general coordinate-descent interfaces and the deprecated names;
