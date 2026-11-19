@@ -155,6 +155,26 @@ function lasso_cases!(catalog)
     measure = MEASURE.gap, target = 1e-4,
     build = p -> lasso_inputs(p; T = Float32, tol = 1e-6), call = lasso_call,
     certify = (p, s, out) -> lasso_certificate(s, out))
+
+  # ---- elastic net (#222) ----
+  # The raw inputs of the scenario, fit with alpha = 0.5, an intercept and standardization at the
+  # level ratio λmax of the elastic net on the centered and scaled problem, λmax = maxⱼ |zⱼ'ỹ|/(n alpha)
+  # (the lasso's λmax of `dense` divided by alpha). The certificate reads the stored intercept and
+  # coefficients, and is stated for the inputs λ and alpha of the case.
+  elastic_net_target = 1e-6
+  function elastic_net_inputs(p; alpha = 0.5, ratio = 0.1, tol = 1e-7)
+    Z, r = standardized(p.X, p.y)
+    λ = ratio * lambda_max(Z, r) / alpha
+    solver = CDSolver(; tol, rng = solver_rng())
+    (; X = p.X, y = p.y, λ, alpha, solver, levels = [λ, alpha])
+  end
+  elastic_net_call(s) = lasso(s.X, s.y, s.λ, s.solver; alpha = s.alpha, intercept = true, standardize_x = true)
+  elastic_net_certificate(s, out) =
+    elastic_net_gap(s.X, s.y, out.intercept, out.coefficients, s.λ, s.alpha; target = elastic_net_target)
+  add_case!(catalog, "lasso", "elastic_net", "dense"; scenario = "ls-200x50",
+    measure = MEASURE.gap, target = elastic_net_target,
+    build = p -> elastic_net_inputs(p), call = elastic_net_call,
+    certify = (p, s, out) -> elastic_net_certificate(s, out))
 end
 
 function control_cases!(catalog)

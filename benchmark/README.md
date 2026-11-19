@@ -68,6 +68,7 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 |---|---|---|---|
 | `lasso/lasso/dense` | quick | `ls-200x50` | 1e-6 |
 | `lasso/lasso/dense-standardized` | quick | `ls-200x50`, raw inputs, `intercept = true, standardize_x = true` | 1e-6 |
+| `lasso/elastic_net/dense` | quick | `ls-200x50`, raw inputs, `alpha = 0.5, intercept = true, standardize_x = true` | 1e-6 |
 | `lasso/lasso/tall` | extended | `ls-tall-5000x40` | 1e-6 |
 | `lasso/lasso/wide` | extended | `ls-wide-100x400` (p > n) | 1e-6 |
 | `lasso/lasso/correlated` | extended | `ls-corr-300x100` (equicorrelated columns, ρ = 0.5) | 1e-6 |
@@ -194,6 +195,38 @@ checks a column whose squares underflow, a dual scaling near `1e-250`, a cancell
 scales, that the value is an upper bound of the exact relative gap of small problems computed in
 rational arithmetic, the core inequality `|P̂ - P| ≤ eP`, and a case whose bounds straddle the target
 (`uncertifiable`) next to cases clearly below and above it (`ok`, with values on the right side).
+
+The certificate of `lasso/elastic_net/dense` (`elastic_net_gap`, in `certificates.jl`) is stated for
+the objective `‖y - β₀1 - Xβ‖²/(2n) + λα Σⱼ sⱼ|βⱼ| + (λ(1 - α)/2) Σⱼ sⱼ²βⱼ²`, with `sⱼ` as above and the
+inputs `λ` and `alpha = 0.5` of the case (not the fields of the returned fit). The case passes the raw
+inputs of `ls-200x50` at `λ = 0.1 λmax`, where `λmax = maxⱼ |zⱼ'ỹ|/(nα)` is that of the elastic net on the
+centered and scaled problem (the `λmax` of `dense`, divided by `alpha`). With `θⱼ = sⱼβⱼ`, `ν = λ(1 - α)`,
+the augmented design `Zₐ = [Z; √(nν) I]` and `yₐ = [ỹ; 0]`, one has
+`‖yₐ - Zₐθ‖²/(2n) + λα‖θ‖₁ = ‖ỹ - Zθ‖²/(2n) + (ν/2)‖θ‖² + λα‖θ‖₁`: the elastic net is the lasso on the
+augmented design, with the divisor `n` of the original problem. The divisor is `n`, not the `n + p` rows of
+`Zₐ`, and the extra rows carry `√(nν)`, not `√ν`. The primal value `P` is the objective on the raw
+data at the stored intercept and coefficients. The dual point is that of the augmented lasso built from the
+residual `r = y - β₀1 - Xβ` of the raw data, `θᵣ = (r - r̄)/n` and `t θᵣ` with the second block
+`-t√(ν/n) θ`; it is feasible when `t|x̃ⱼ'θᵣ - ν sⱼ²βⱼ| ≤ λα sⱼ` for the columns with `sⱼ > 0`, and its value is
+`D = t ỹ'θᵣ - n t²‖θᵣ‖²/2 - t² ν Σⱼ sⱼ²βⱼ²/2`. The arithmetic, the error bounds, the interval
+`[value_lo, value_hi]` of the relative gap, the rule for `uncertifiable` and the other refusals are those of
+`lasso_standardized_parts` (the error model of the new quantities is written in `certificates.jl` above
+`elastic_net_parts`); the unit roundoff terms of the product `λα` do not arise, because the product of two
+Float64 numbers is exact in 256 bits. For `alpha = 1` the certificate reduces to that of `dense-standardized`. Observation, not a guarantee: with
+ProximalBase `7d5d1e006b02814fb28f8cfb5eca20a05d73ee9e` and ProximalSolvers
+`a0a064778acb34d0535408a31ab2f09ae657e4aa` on Julia 1.13.4, with the settings of the smoke run of the integrity
+checks, the case ended `ok` in repetition 1 with a relative gap of `2.8e-8`.
+`check_certificates.jl` tests it with a problem whose solution is known by construction, a closed-form optimum
+on an orthogonal design (the gap is zero to rounding), perturbed intercepts and coefficients, weak duality and
+dual feasibility at random points, agreement of the primal and dual values with an independent Float64
+computation of the augmented lasso, the zero solution at `λ ≥ λmax` and its positive gap below, a constant
+column, a cancellation in the primal (`uncertifiable`), the upper bound against the exact relative gap of a
+small problem in rational arithmetic, a case whose bounds straddle the target (`uncertifiable`), and invalid
+inputs. The same independent computation is run with the divisor `n + p`, and with the rows `√ν` in place of
+`√(nν)`: at the closed-form optimum their gap is not zero (above `1e-6`, against at most `1e-11` for the
+certificate), and at the points near the designed optimum of the control their primal and dual values differ
+from those of the certificate by more than 1% of the value, so these two errors would be detected by the
+controls. The control also runs the case once against its target.
 
 ### Group lasso certificate
 

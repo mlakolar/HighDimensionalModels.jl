@@ -25,8 +25,8 @@ println(count(!iszero, coef(fit)), " nonzero coefficients of ", p)
 println(round.(coef(fit)[1:5]; digits = 2))
 ```
 
-The [lasso page](lasso.md) gives the inputs, the result, how convergence is reported and how to
-check a fit independently.
+The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net. The [lasso page](lasso.md) gives
+the inputs, the result, how convergence is reported and how to check a fit independently.
 
 ## What is not supported
 
@@ -35,8 +35,8 @@ check a fit independently.
   refused with an `ArgumentError`; nothing is converted.
 - An intercept, standardization and observation weights.
 - Penalty paths, screening, continuation and cross-validation.
-- Weighted, adaptive, feasible, scaled and square-root lasso; the elastic net and nonconvex
-  penalties; generalized linear models.
+- Weighted, adaptive, feasible, scaled and square-root lasso; nonconvex penalties;
+  generalized linear models.
 - Sparse-group and multitask regression; quantile regression; SLOPE and knockoffs;
   structured and fused penalties; low-rank and sparse-plus-low-rank models;
   varying-coefficient models; post-selection inference.
