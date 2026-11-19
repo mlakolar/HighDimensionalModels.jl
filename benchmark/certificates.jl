@@ -364,3 +364,154 @@ function lasso_gap(X, y, β, λ)
   a.kkt === nothing || return relative_residual(a.kkt, a.g0, :kkt_residual)
   relative_gap(a.P, a.D; a.scale, a.terms)
 end
+
+# ---- elastic net (#222) ----
+#
+# `elastic_net_gap` is the certificate for the elastic net with an intercept and column scales
+# (λ > 0, 0 < α ≤ 1), at the stored intercept β₀ and coefficients β:
+#
+#   ‖y - β₀1 - Xβ‖²/(2n) + λα Σⱼ sⱼ|βⱼ| + (λ(1 - α)/2) Σⱼ sⱼ²βⱼ²,
+#
+# with sⱼ as for `lasso_gap_standardized`. With θⱼ = sⱼβⱼ, ν = λ(1 - α) and the augmented design
+# Zₐ = [Z; √(nν) I], yₐ = [ỹ; 0] (Z the centred columns over their scales, ỹ = y - ȳ),
+#
+#   ‖yₐ - Zₐθ‖²/(2n) = ‖ỹ - Zθ‖²/(2n) + (ν/2)‖θ‖²,
+#
+# so that the objective in θ is the lasso ‖yₐ - Zₐθ‖²/(2n) + λα‖θ‖₁ with the divisor n of the
+# original problem, not n + p (the number of rows of Zₐ). The primal value P is the objective on the
+# raw data at the stored (β₀, β). The dual point is built from the residual r = y - β₀ - Xβ of the
+# raw data, with θᵣ = (r - r̄)/n (so that θᵣ = (ỹ - Zθ)/n) and the point of the augmented problem
+# t·rₐ/n = t[θᵣ; -√(ν/n) θ]:
+#
+#   ‖Zₐᵀ(t rₐ/n)‖∞ ≤ λα  is  |x̃ⱼᵀθᵣ - ν sⱼ²βⱼ| t ≤ λα sⱼ  for every column with sⱼ > 0
+#   (a column with sⱼ = 0 has x̃ⱼ = 0 and θⱼ = 0: its entry of the product is 0),
+#
+#   D = t ỹᵀθᵣ - n t²‖θᵣ‖²/2 - t² ν Σⱼ sⱼ²βⱼ²/2 = (‖yₐ‖² - ‖yₐ - t rₐ‖²)/(2n).
+#
+# Weak duality for the lasso on (Zₐ, yₐ) with the divisor n gives D ≤ ‖yₐ - Zₐθ'‖²/(2n) + λα‖θ'‖₁
+# for every θ', and in exact arithmetic min over β₀ of the objective is the objective of the centred
+# problem, so D is below the minimum of the problem and P ≥ D. For α = 1 (ν = 0) this is the
+# certificate of `lasso_gap_standardized`.
+#
+# The arithmetic and the verdict are those of `lasso_standardized_parts`: 256-bit BigFloat from the
+# stored Float64 inputs, G(k) = 8ku, an absolute error bound for each computed quantity, the interval
+# [value_lo, value_hi] of the relative gap, and the status uncertifiable when the target lies in
+# [value_lo, value_hi). The quantities of the model above that are new, with hats for computed values:
+#   * a = λα is exact (the product of two Float64 numbers has at most 106 bits); ν̂ = fl(λ fl(1 - α)),
+#     eν = G(2) ν̂ (zero for α = 1);
+#   * ĉⱼ = fl(ŝⱼ βⱼ) for θⱼ = sⱼβⱼ: ecⱼ = esⱼ|βⱼ| + G(1)|ĉⱼ|; Ĉ = Σ ĉⱼ² for C = Σ θⱼ²:
+#     eC = Σ ecⱼ(2|ĉⱼ| + ecⱼ) + G(p+1) Ĉ;
+#   * m̂ⱼ = fl(ŝⱼ ĉⱼ) for sⱼθⱼ = sⱼ²βⱼ: emⱼ = |ŝⱼ| ecⱼ + |ĉⱼ| esⱼ + esⱼ ecⱼ + G(1)|ŝⱼ ĉⱼ|;
+#     q̂ⱼ = fl(ν̂ m̂ⱼ) for ν sⱼ²βⱼ: eqⱼ = ν̂ emⱼ + |m̂ⱼ| eν + eν emⱼ + G(1) ν̂ |m̂ⱼ|;
+#   * ĥⱼ = fl(ĝⱼ - q̂ⱼ), for hⱼ = x̃ⱼᵀθᵣ - ν sⱼ²βⱼ with ĝⱼ and egⱼ of the model of
+#     `lasso_standardized_parts`: ehⱼ = egⱼ + eqⱼ + G(1)|ĥⱼ|;
+#   * the dual point tθᵣ with the number t = min(1, minⱼ a(ŝⱼ - esⱼ)/(|ĥⱼ| + ehⱼ)) over the columns with
+#     sⱼ > 0, times 1 - 2⁻¹⁰⁰ when below 1, and the check t(|ĥⱼ| + ehⱼ) ≤ a(ŝⱼ - esⱼ), which gives
+#     |t hⱼ| ≤ a sⱼ in exact arithmetic;
+#   * primal P = ‖r‖²/(2n) + a Σⱼ sⱼ|βⱼ| + νC/2: eΠ = a(Σⱼ esⱼ|βⱼ| + G(p+2) Σⱼ ŝⱼ|βⱼ|),
+#     eR = (ν̂ eC + Ĉ eν + eν eC)/2 + G(2) ν̂ Ĉ/2, eP = eQ/(2n) + eΠ + eR + G(5) P̂ (eQ as before);
+#   * dual value D = t Â - n t² B̂/2 - t² ν̂ Ĉ/2: eD = t eA + n t² eB/2 + t² (ν̂ eC + Ĉ eν + eν eC)/2 +
+#     G(9)(t|Â| + n t² B̂/2 + t² ν̂ Ĉ/2).
+# The divisor of the quadratic terms and of the dual point is the original n = size(X, 1); no divisor is n + p.
+
+# The computed primal and dual values with their error bounds, the dual point and the bounds of the
+# relative gap, as described above. Returns a String with the reason when there is no certificate.
+function elastic_net_parts(X, y, β₀, β, λ, α)
+  d = cert_regression(X, y, β)
+  d isa String && return d
+  cert_finite(β₀) || return "nonfinite intercept"
+  cert_finite(λ) && λ > 0 || return "λ must be finite and positive"
+  cert_finite(α) && 0 < α <= 1 || return "α must be finite with 0 < α ≤ 1"
+  (; X, y, β, n, p) = d
+  setprecision(BigFloat, 256) do
+    Xt, s, εx, es = centered_columns(X)
+    j = bad_scale(X, s)
+    j == 0 || return "the scale of column $j of X is not a normal Float64 (zero, subnormal or not finite) or is 0 for a column that is not constant"
+    positive = [j for j in 1:p if !iszero(s[j])]
+    all(j -> es[j] < s[j], positive) || return "the error bound of a scale is not below the scale (column $(first(j for j in positive if !(es[j] < s[j]))))"
+    λb, αb, β₀b, yb, βb, Xb = BigFloat(λ), BigFloat(α), BigFloat(β₀), BigFloat.(y), BigFloat.(β), BigFloat.(X)
+    a = λb * αb                                          # exact: at most 106 bits
+    ν = λb * (1 - αb)
+    eν = isone(αb) ? zero(BigFloat) : errG(2) * ν
+    # the quantities of the ridge term
+    c = [s[j] * βb[j] for j in 1:p]
+    ec = [es[j] * abs(βb[j]) + errG(1) * abs(c[j]) for j in 1:p]
+    C = sum(abs2, c)
+    eC = sum(ec[j] * (2 * abs(c[j]) + ec[j]) for j in 1:p) + errG(p + 1) * C
+    m = [s[j] * c[j] for j in 1:p]
+    em = [s[j] * ec[j] + abs(c[j]) * es[j] + es[j] * ec[j] + errG(1) * abs(s[j] * c[j]) for j in 1:p]
+    q = [ν * m[j] for j in 1:p]
+    eq = [ν * em[j] + abs(m[j]) * eν + eν * em[j] + errG(1) * ν * abs(m[j]) for j in 1:p]
+    ridge = ν * C / 2
+    eridge = (ν * eC + C * eν + eν * eC) / 2 + errG(2) * ν * C / 2
+    # primal
+    f = Xb * βb
+    ef = errG(p) .* (abs.(Xb) * abs.(βb))
+    r = (yb .- β₀b) .- f
+    er = ef .+ errG(2) .* (abs.(yb) .+ abs(β₀b) .+ abs.(f))
+    πs = sum(s[j] * abs(βb[j]) for j in 1:p)
+    Π = a * πs
+    eΠ = a * (sum(es[j] * abs(βb[j]) for j in 1:p) + errG(p + 2) * πs)
+    Q = sum(abs2, r)
+    eQ = sum(er[i] * (2 * abs(r[i]) + er[i]) for i in 1:n) + errG(n + 1) * Q
+    P = Q / (2n) + Π + ridge
+    eP = eQ / (2n) + eΠ + eridge + errG(5) * P
+    # dual point
+    r̄ = sum(r) / n
+    ecr = sum(er) / n + errG(n + 1) * sum(abs, r) / n
+    u = r .- r̄
+    eu = er .+ ecr .+ errG(1) .* abs.(u)
+    θ = u ./ n
+    eθ = eu ./ n .+ errG(1) .* abs.(θ)
+    g = [sum(Xt[i, j] * θ[i] for i in 1:n) for j in 1:p]
+    eg = [errG(n) * sum(abs(Xt[i, j]) * abs(θ[i]) for i in 1:n) +
+          sum(abs(Xt[i, j]) * eθ[i] + abs(θ[i]) * εx[j] + εx[j] * eθ[i] for i in 1:n) for j in 1:p]
+    h = g .- q
+    eh = eg .+ eq .+ errG(1) .* abs.(h)
+    room = [a * (s[j] - es[j]) for j in 1:p]
+    need = [abs(h[j]) + eh[j] for j in 1:p]
+    t = one(BigFloat)
+    for j in positive
+      need[j] > room[j] && (t = min(t, room[j] / need[j]))
+    end
+    t < 1 && (t *= 1 - BigFloat(2)^-100)
+    all(j -> t * need[j] <= room[j], positive) || return "the dual point cannot be shown feasible in the original coordinates"
+    feasibility = isempty(positive) ? zero(BigFloat) : maximum(j -> t * need[j] / room[j], positive)
+    # dual value
+    cy = exact_mean(y)
+    ecy = all(==(first(y)), y) ? zero(BigFloat) : errG(n + 1) * sum(abs, yb) / n
+    ỹ = yb .- cy
+    eỹ = ecy .+ errG(1) .* abs.(ỹ)
+    A = sum(ỹ[i] * θ[i] for i in 1:n)
+    eA = errG(n) * sum(abs(ỹ[i]) * abs(θ[i]) for i in 1:n) + sum(abs(ỹ[i]) * eθ[i] + abs(θ[i]) * eỹ[i] + eỹ[i] * eθ[i] for i in 1:n)
+    B = sum(abs2, θ)
+    eB = sum(eθ[i] * (2 * abs(θ[i]) + eθ[i]) for i in 1:n) + errG(n + 1) * B
+    t2 = t * t
+    D = t * A - n * t2 * B / 2 - t2 * ridge
+    eD = t * eA + n * t2 * eB / 2 + t2 * eridge + errG(9) * (t * abs(A) + n * t2 * B / 2 + t2 * ridge)
+    # verdict
+    P_hi, D_lo = P + eP, D - eD
+    P_hi < D_lo && return "the error bounds contradict weak duality: P + eP = $(Float64(P_hi)) < D - eD = $(Float64(D_lo))"
+    den_lo = max(P - eP, BigFloat(floatmin(Float64)))
+    width = (eP + eD) / den_lo
+    width > 1e-8 && return "the error bound of the gap, relative to the primal value, is $(Float64(width)) > 1e-8: the arithmetic cannot support a certificate"
+    gap = Float64(max(P_hi - D_lo, zero(BigFloat)) / den_lo, RoundUp)
+    isfinite(gap) || return "the upper bound of the relative gap is not finite"
+    den_hi = max(P_hi, BigFloat(floatmin(Float64)))
+    gap_lo = Float64(max((P - eP) - (D + eD), zero(BigFloat)) / den_hi, RoundDown)
+    P64, D64 = report64(P), report64(D)
+    (P64 === nothing || D64 === nothing) && return "the primal or dual value is not a normal Float64"
+    (; P = P64, D = D64, eP = Float64(eP, RoundUp), eD = Float64(eD, RoundUp), θ = Float64.(t .* θ), t = Float64(t),
+       feasibility = Float64(feasibility, RoundUp), width = Float64(width, RoundUp), gap, gap_lo,
+       Pb = P, ePb = eP, Db = D, eDb = eD)
+  end
+end
+
+function elastic_net_gap(X, y, β₀, β, λ, α; target::Float64)
+  isfinite(target) && target > 0 || return uncertifiable("the target must be finite and positive")
+  a = elastic_net_parts(X, y, β₀, β, λ, α)
+  a isa String && return uncertifiable(a)
+  a.gap_lo <= target < a.gap && return uncertifiable(
+    "the rounding uncertainty could change the verdict: the relative gap is in [$(a.gap_lo), $(a.gap)] and the target is $target")
+  cert_ok(a.gap, :relative_gap; note = "upper bound; the relative width of the error bound is $(a.width)")
+end
