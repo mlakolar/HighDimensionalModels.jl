@@ -13,6 +13,7 @@ parallel = [
   "ci_plan",
   "dependencies",
   "elastic_net",
+  "group_lasso",
   "lasso",
   "lasso_intercept",
   "lasso_reference",

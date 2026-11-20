@@ -9,7 +9,7 @@ output that misses its target is a recorded failure, not a timing. It does not
 measure native (non-Julia) allocations or the statistical quality of the
 estimates. Peak memory is recorded only as the process-wide `maxrss_bytes`.
 
-The package provides one estimator, the Gaussian lasso, on ProximalBase and
+The package provides the Gaussian lasso and the group lasso, on ProximalBase and
 ProximalSolvers. The cases, certificates and evidence of the estimators that
 the package no longer contains are on the branch `legacy/full` and in the GitHub
 release `benchmark-evidence`.
@@ -43,7 +43,7 @@ instead of writing over records with the same file prefix.
 | Setting | Default | Use |
 |---|---|---|
 | `HDM_SUITE` | `quick` | `extended` runs the quick cases and adds the tall, wide, correlated, large and Float32 cases. |
-| `HDM_GROUPS` | `lasso` | Comma-separated groups (`lasso`, `controls`), selected before any data are drawn. |
+| `HDM_GROUPS` | `lasso,group` | Comma-separated groups (`lasso`, `group`, `controls`), selected before any data are drawn. |
 | `HDM_CASES` | All cases | Comma-separated globs on case ids (`*`, `?`), within the suite and groups. |
 | `HDM_REPETITION` | `1` | Process and input draw, numbered 1–10. |
 | `HDM_OUTPUT` | `benchmark/results` | Directory for the process records. |
@@ -75,6 +75,8 @@ HDM_SUITE=extended HDM_GROUPS=lasso,controls HDM_LIST=true \
 | `lasso/lasso/correlated` | extended | `ls-corr-300x100` (equicorrelated columns, ρ = 0.5) | 1e-6 |
 | `lasso/lasso/large` | extended | `ls-2000x1000` | 1e-6 |
 | `lasso/lasso/float32` | extended | `ls-200x50`, Float32 | 1e-4 |
+| `group/group_lasso/orthonormal` | quick | `groups-200x60`, raw inputs, `intercept = true, standardize = :orthonormal` | 1e-6 |
+| `group/group_lasso/none` | extended | `groups-200x60`, raw inputs, `intercept = true, standardize = :none` | 1e-6 |
 | `controls/lasso/one-pass` | quick, with `HDM_GROUPS=controls` | `ls-200x50` | 1e-8, must end `target_missed` |
 
 The scenarios of `problems.jl` draw columns with shifted means and scales and a
@@ -271,6 +273,37 @@ Observation, not a guarantee: with ProximalBase `7d5d1e006b02814fb28f8cfb5eca20a
 ProximalSolvers `a0a064778acb34d0535408a31ab2f09ae657e4aa`, on Julia 1.13.4, repetition 1, the case ended `ok`
 with a certificate value of `1.3e-9`, against the target `1e-4`. Other dependency commits can give other values.
 
+### Group lasso certificate
+
+The cases `group/group_lasso/orthonormal` and `group/group_lasso/none` pass the raw inputs of `groups-200x60`
+(twelve groups of five consecutive columns, correlated within a group, 200 rows) to
+`group_lasso(X, y, λ, groups, solver; intercept = true, standardize)` at `λ = 0.1 λmax` with the default weights
+`√|Gₖ|`, where `λmax` is computed in the fixed order of the harness (no BLAS) for the same `standardize`. The
+certificate `group_gap` (in `certificates.jl`) is stated for the objective
+`‖y - β₀1 - Xβ‖²/(2n) + λ Σₖ wₖ ‖X̃_{Gₖ}β_{Gₖ}‖/√n` (`orthonormal`) or `... + λ Σₖ wₖ ‖β_{Gₖ}‖` (`none`) at the stored
+intercept and coefficients, with `X̃` centered at the exact means. The dual point is `u = t r_c` with `r_c` the
+centered residual, and `t ≤ 1` is such that `u` is feasible in exact arithmetic: `‖P_G u‖ ≤ √n λ wₖ` with `P_G` the
+projector onto the full column span of `X̃_G`, built from all its columns by the normal equations, without dropping a
+direction (for this the Gram matrix of `X̃_G` must be positive definite in rational arithmetic: the certifier returns
+`uncertifiable` for a group with a singular Gram matrix, although the projector onto the span of such columns exists
+and the certifier does not construct it), or
+`‖X̃_G'u‖/n ≤ λ wₖ` for each group. The dual value `D` is then at most the objective at all `(β₀, β)`. The stored
+inputs are converted to rational numbers without rounding, and `r_c`, the Gram matrices, `X̃_G'u` and `D` are
+computed in rational arithmetic, so there is no rounding error to bound there; the square roots of the penalty and the
+conversions to Float64 are rounded, with directed rounding in 256-bit BigFloat, which gives `P_lo ≤ P ≤ P_hi` and `D_lo ≤ D ≤ D_hi`. As for
+`dense-standardized`, the value is the upper bound `value_hi` of the relative gap
+`max(P - D, 0)/max(P, floatmin)` and the certificate is `uncertifiable` when `value_lo ≤ target < value_hi`. The
+domain of this certifier is `λ > 0` and positive weights, and it returns `uncertifiable` for `λ = 0` or a weight of
+zero. That is a limit of this routine, not a statement that no dual point exists there: `t = 0` gives `u = 0` and
+`D = 0`, a feasible point with a valid, possibly loose gap, and a positive `t` can be feasible too. No KKT residual is
+reported as a gap. `check_certificates.jl` tests the exact bounds, a closed-form case (two orthogonal centered columns whose
+solution is `(1 - √n λ w/‖P_G ỹ‖) P_G ỹ`, with a relative gap of `49/64` at `β = 0`), a designed optimum for both
+objectives, nonoptimal points, weak duality and feasibility at random points, the zero solution at `λ ≥ λmax`, a
+nearly collinear group, groups with a singular Gram matrix, `λ = 0` and a weight of zero, nonfinite inputs, and runs
+both cases once against their target.
+The solver's tolerance is explicit in each case: `1e-7` for `orthonormal` and `1e-8` for `none`, which left relative
+gaps of at most `6.3e-8` and `7.3e-8` in a pilot on repetitions 1 to 10 on Julia 1.13.4 (`1e-7` left up to `6.9e-7` for `none`).
+
 | Status | Meaning |
 |---|---|
 | `ok` | The certificate is valid and its value meets the threshold target. |
@@ -434,6 +467,8 @@ JULIA_NUM_THREADS=1 julia --project="$ENV_DIR" benchmark/check_certificates.jl
 export HDM_EXPECTED_PACKAGE_ROOT="$PWD" HDM_SAMPLES=5 HDM_SECONDS=0.2 JULIA_NUM_THREADS=1
 HDM_GROUPS=lasso HDM_OUTPUT="$OUT/lasso" julia --project="$ENV_DIR" benchmark/run.jl
 python3 benchmark/validate.py "$OUT/lasso" "$OUT/lasso.json"
+HDM_GROUPS=group HDM_OUTPUT="$OUT/group" julia --project="$ENV_DIR" benchmark/run.jl
+python3 benchmark/validate.py "$OUT/group" "$OUT/group.json"
 code=0
 HDM_GROUPS=controls HDM_OUTPUT="$OUT/controls" julia --project="$ENV_DIR" benchmark/run.jl > "$OUT/controls.log" || code=$?
 cat "$OUT/controls.log"
@@ -444,7 +479,8 @@ python3 benchmark/validate.py "$OUT/controls" "$OUT/controls.json"
 
 In order: the Python controls of the record tools; the environment; the
 certificate controls; the quick lasso cases, which must end `ok` (the runner exits
-with 0); the validation of its records; the control case, which must end
+with 0); the validation of its records; the quick group lasso case, which must end `ok`, and the validation of its
+records; the control case, which must end
 `target_missed` (the runner exits with 2); and the validation of its records.
 Under `bash -e`, a failing command other than the guarded control run
 (`|| code=$?`) ends the sequence and fails the job.

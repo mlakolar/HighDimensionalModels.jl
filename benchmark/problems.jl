@@ -87,6 +87,32 @@ function least_squares(rng, n, p; k = 5, ρ = 0.0)
   (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), truth = β)
 end
 
+# ---- group lasso (#224) ----
+# The scenario "groups-200x60": twelve groups of five consecutive columns (`grouped_groups`), each
+# group's columns correlated, and three active groups with three nonzero coefficients each. The
+# columns of a group become X_G ← √0.7 X_G + √0.3 z sdᵀ, with z one Gaussian draw shared by the group
+# and sd the standard deviations of its columns. The fields are those of `least_squares`; the groups
+# are a function of the shape, so that the scenario fields stay arrays of Float64.
+const GROUPED_SHAPE = (ngroups = 12, size = 5)
+grouped_groups(ngroups, size) = [collect((g - 1) * size + 1:g * size) for g in 1:ngroups]
+
+function grouped(rng, n, ngroups, size)
+  p = ngroups * size
+  groups = grouped_groups(ngroups, size)
+  X = gaussian_design(rng, n, p)
+  for G in groups
+    sd = transpose([sample_sd(X[:, j]) for j in G])
+    X[:, G] .= sqrt(0.7) .* X[:, G] .+ sqrt(0.3) .* gaussian(rng, n) .* sd
+  end
+  β = zeros(p)
+  for g in draw_indices(rng, ngroups, 3)
+    G = groups[g]
+    β[G[draw_indices(rng, size, 3)]] .= draw_signs(rng, 3) .* (0.5 .+ uniform(rng, 3))
+  end
+  signal = product(X, β)
+  (; X, y = 1.0 .+ signal .+ noise_sd(signal, 4.0) .* gaussian(rng, n), truth = β)
+end
+
 const SCENARIO_BUILDERS = [
   # quick shape
   "ls-200x50" => rng -> least_squares(rng, 200, 50),
@@ -95,6 +121,8 @@ const SCENARIO_BUILDERS = [
   "ls-wide-100x400" => rng -> least_squares(rng, 100, 400),
   "ls-corr-300x100" => rng -> least_squares(rng, 300, 100; ρ = 0.5),
   "ls-2000x1000" => rng -> least_squares(rng, 2000, 1000; k = 10),
+  # group lasso shape
+  "groups-200x60" => rng -> grouped(rng, 200, GROUPED_SHAPE.ngroups, GROUPED_SHAPE.size),
 ]
 
 const SCENARIOS = String[first(b) for b in SCENARIO_BUILDERS]

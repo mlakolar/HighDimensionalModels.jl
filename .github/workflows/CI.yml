@@ -182,6 +182,8 @@ jobs:
           export HDM_EXPECTED_PACKAGE_ROOT="$PWD" HDM_SAMPLES=5 HDM_SECONDS=0.2 JULIA_NUM_THREADS=1
           HDM_GROUPS=lasso HDM_OUTPUT="$OUT/lasso" julia --project="$ENV_DIR" benchmark/run.jl
           python3 benchmark/validate.py "$OUT/lasso" "$OUT/lasso.json"
+          HDM_GROUPS=group HDM_OUTPUT="$OUT/group" julia --project="$ENV_DIR" benchmark/run.jl
+          python3 benchmark/validate.py "$OUT/group" "$OUT/group.json"
           code=0
           HDM_GROUPS=controls HDM_OUTPUT="$OUT/controls" julia --project="$ENV_DIR" benchmark/run.jl > "$OUT/controls.log" || code=$?
           cat "$OUT/controls.log"

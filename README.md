@@ -5,7 +5,9 @@
 [![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
 The package fits the Gaussian lasso at a single penalty level, `lasso` (with the elastic net through the
-keyword `alpha`), and the square-root lasso, `sqrt_lasso`. The Gaussian lasso solves
+keyword `alpha`), the square-root lasso, `sqrt_lasso`, and the group lasso at a single penalty level,
+`group_lasso` (see the [documentation](https://mlakolar.github.io/HighDimensionalModels.jl/dev/group_lasso/)).
+The Gaussian lasso solves
 
 ```
 minimize over β:   ‖y - Xβ‖² / (2n) + λ ‖β‖₁ ,      n = size(X, 1).
@@ -67,9 +69,12 @@ throw an `ArgumentError` or a `DimensionMismatch`; the checks are described in t
 `lasso`. The keyword `alpha`, with `0 < alpha ≤ 1`, gives the elastic net (see the lasso page of
 the documentation).
 
+`group_lasso(X, y, λ, groups, solver = CDSolver())` takes the same types of `X`, `y`, `λ` and solver,
+and `groups`, a vector of vectors of column indices that partition the columns.
+
 Not supported: an intercept, standardization, observation weights; penalty paths, screening and
 cross-validation; weighted, adaptive, feasible and scaled lasso; nonconvex penalties;
-generalized linear models; group, sparse-group and multitask regression;
+generalized linear models; sparse-group and multitask regression;
 quantile regression; SLOPE and knockoffs; structured, fused, low-rank and varying-coefficient
 models; post-selection inference; integer, sparse and view designs.
 
